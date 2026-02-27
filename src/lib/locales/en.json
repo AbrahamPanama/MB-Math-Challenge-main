@@ -1,0 +1,99 @@
+{
+  "header": {
+    "profile": "Profile",
+    "switchProfile": "Switch Profile",
+    "logout": "Log out"
+  },
+  "sidebar": {
+    "dashboard": "Dashboard",
+    "skillMap": "Skill Map",
+    "progress": "Progress",
+    "student": "Student"
+  },
+  "home": {
+    "title": "Welcome to RetoMates",
+    "subtitle": "Your personal math challenge partner. Master arithmetic with fun, adaptive practice designed to build confidence and skills.",
+    "getStarted": "Get Started",
+    "featuresTitle": "Unlock Your Math Superpowers",
+    "featuresSubtitle": "RetoMates is built on proven learning principles to help you succeed.",
+    "feature1Title": "Adaptive Learning",
+    "feature1Description": "Problems adjust to your level, keeping you challenged but not overwhelmed.",
+    "feature2Title": "Engaging Content",
+    "feature2Description": "Master core skills with fun challenges and immediate, helpful feedback.",
+    "feature3Title": "Track Your Progress",
+    "feature3Description": "Watch your skills grow, earn stars for mastery, and build your streak.",
+    "footer": "© 2024 RetoMates. All rights reserved."
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "welcome": "Welcome back, {name}!",
+    "start": "Start",
+    "continueLearning": "Continue Learning",
+    "practice": "Practice",
+    "progressHint": "You're {progress}% of the way there!"
+  },
+  "progress": {
+    "title": "My Progress",
+    "currentStreak": "Current Streak",
+    "days": "days",
+    "totalXP": "Total XP",
+    "skillsMastered": "Skills Mastered",
+    "weeklyXP": "Weekly XP Gained"
+  },
+  "skills": {
+    "title": "Skill Map",
+    "mastered": "{progress}% Mastered",
+    "practiceNow": "Practice Now"
+  },
+  "practice": {
+    "title": "Practice Mode",
+    "smartPracticeTitle": "Smart Practice",
+    "selectSkill": "Choose a skill to practice",
+    "startPractice": "Start Practice",
+    "constructionTitle": "Practice Arena Under Construction!",
+    "constructionSubtitle": "This is where the magic will happen. Get ready for some math challenges!",
+    "dailyMissionConstruction": "Daily Mission is coming soon. Check back later!",
+    "backToDashboard": "Back to Dashboard",
+    "loadingProblem": "Loading a new challenge...",
+    "checkAnswer": "Check Answer",
+    "checking": "Checking...",
+    "nextQuestion": "Next Question",
+    "correct": "Correct!",
+    "incorrect": "Not quite, but good try!",
+    "correctAnswerIs": "The correct answer is {correctAnswer}.",
+    "showHint": "Need a hint?",
+    "finalAnswer": "Your final answer"
+  },
+  "practiceModes": {
+    "smartPractice": {
+      "title": "Smart Practice",
+      "description": "Adaptive challenges in a skill of your choice."
+    },
+    "dailyMission": {
+      "title": "Daily Mission",
+      "description": "A quick mix of skills to keep your mind sharp."
+    },
+    "unitBoss": {
+      "title": "Unit Boss",
+      "description": "Prove your mastery and earn the final star!"
+    }
+  },
+  "skillsData": {
+    "multiplication": {
+      "name": "Multiplication Tables",
+      "description": "Facts, missing factors, and more."
+    },
+    "addition_subtraction": {
+      "name": "Two-Digit +/-",
+      "description": "Practice with and without carrying."
+    },
+    "fractions": {
+      "name": "Fractions",
+      "description": "Equivalence, simplifying, and operations."
+    },
+    "divisibility": {
+      "name": "Divisibility Rules",
+      "description": "Learn the rules for 2, 3, 5, and more."
+    }
+  }
+}

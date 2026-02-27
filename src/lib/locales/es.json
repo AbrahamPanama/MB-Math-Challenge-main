@@ -1,0 +1,99 @@
+{
+  "header": {
+    "profile": "Perfil",
+    "switchProfile": "Cambiar Perfil",
+    "logout": "Cerrar sesión"
+  },
+  "sidebar": {
+    "dashboard": "Tablero",
+    "skillMap": "Mapa de Habilidades",
+    "progress": "Progreso",
+    "student": "Estudiante"
+  },
+  "home": {
+    "title": "Bienvenido a RetoMates",
+    "subtitle": "Tu compañero personal de desafíos matemáticos. Domina la aritmética con práctica divertida y adaptativa diseñada para desarrollar confianza y habilidades.",
+    "getStarted": "Empezar",
+    "featuresTitle": "Desbloquea Tus Superpoderes Matemáticos",
+    "featuresSubtitle": "RetoMates se basa en principios de aprendizaje probados para ayudarte a tener éxito.",
+    "feature1Title": "Aprendizaje Adaptativo",
+    "feature1Description": "Los problemas se ajustan a tu nivel, manteniéndote desafiado pero no abrumado.",
+    "feature2Title": "Contenido Atractivo",
+    "feature2Description": "Domina habilidades básicas con desafíos divertidos y retroalimentación inmediata y útil.",
+    "feature3Title": "Sigue Tu Progreso",
+    "feature3Description": "Observa cómo crecen tus habilidades, gana estrellas por maestría y construye tu racha.",
+    "footer": "© 2024 RetoMates. Todos los derechos reservados."
+  },
+  "dashboard": {
+    "title": "Tablero",
+    "welcome": "¡Bienvenida de nuevo, {name}!",
+    "start": "Empezar",
+    "continueLearning": "Continuar Aprendiendo",
+    "practice": "Practicar",
+    "progressHint": "¡Estás al {progress}% del camino!"
+  },
+  "progress": {
+    "title": "Mi Progreso",
+    "currentStreak": "Racha Actual",
+    "days": "días",
+    "totalXP": "XP Total",
+    "skillsMastered": "Habilidades Dominadas",
+    "weeklyXP": "XP Semanal Ganado"
+  },
+  "skills": {
+    "title": "Mapa de Habilidades",
+    "mastered": "{progress}% Dominado",
+    "practiceNow": "Practicar Ahora"
+  },
+  "practice": {
+    "title": "Modo Práctica",
+    "smartPracticeTitle": "Práctica Inteligente",
+    "selectSkill": "Elige una habilidad para practicar",
+    "startPractice": "Empezar a Practicar",
+    "constructionTitle": "¡Arena de Práctica en Construcción!",
+    "constructionSubtitle": "Aquí es donde ocurrirá la magia. ¡Prepárate para algunos desafíos matemáticos!",
+    "dailyMissionConstruction": "La Misión Diaria llegará pronto. ¡Vuelve más tarde!",
+    "backToDashboard": "Volver al Tablero",
+    "loadingProblem": "Cargando un nuevo reto...",
+    "checkAnswer": "Comprobar",
+    "checking": "Comprobando...",
+    "nextQuestion": "Siguiente Pregunta",
+    "correct": "¡Correcto!",
+    "incorrect": "¡No del todo, pero buen intento!",
+    "correctAnswerIs": "La respuesta correcta es {correctAnswer}.",
+    "showHint": "¿Necesitas una pista?",
+    "finalAnswer": "Tu respuesta final"
+  },
+  "practiceModes": {
+    "smartPractice": {
+      "title": "Práctica Inteligente",
+      "description": "Desafíos adaptativos en la habilidad que elijas."
+    },
+    "dailyMission": {
+      "title": "Misión Diaria",
+      "description": "Una mezcla rápida de habilidades para mantener tu mente ágil."
+    },
+    "unitBoss": {
+      "title": "Jefe de Unidad",
+      "description": "¡Demuestra tu maestría y gana la estrella final!"
+    }
+  },
+  "skillsData": {
+    "multiplication": {
+      "name": "Tablas de Multiplicar",
+      "description": "Hechos, factores faltantes y más."
+    },
+    "addition_subtraction": {
+      "name": "+/- de Dos Dígitos",
+      "description": "Practica con y sin llevada."
+    },
+    "fractions": {
+      "name": "Fracciones",
+      "description": "Equivalencia, simplificación y operaciones."
+    },
+    "divisibility": {
+      "name": "Reglas de Divisibilidad",
+      "description": "Aprende las reglas para 2, 3, 5 y más."
+    }
+  }
+}
