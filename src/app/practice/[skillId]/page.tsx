@@ -4,28 +4,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Script from 'next/script';
 import type { Category, Problem } from '@/lib/types';
-import { initializeApp, type FirebaseApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, type Auth } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot, updateDoc, type Firestore } from 'firebase/firestore';
+import { getActiveSave, recordGame } from '@/lib/saveManager';
 
-// --- Firebase Config ---
-const firebaseConfig = {
-    // apiKey: "...",
-    // authDomain: "...",
-    // projectId: "...",
-};
-
-let app: FirebaseApp | undefined;
-let auth: Auth | undefined;
-let db: Firestore | undefined;
-try {
-    app = initializeApp(firebaseConfig);
-    auth = getAuth(app);
-    db = getFirestore(app);
-} catch (e) {
-    console.warn("Firebase no configurado.");
-}
-// --------------------
 
 type GameScreen = 'game' | 'result';
 
@@ -344,25 +324,27 @@ export default function PracticeSessionPage() {
     const synth = useRef<any | null>(null);
     const toneReady = useRef(false);
 
-    // Firebase
-    const [userId, setUserId] = useState<string | null>(null);
+    // Music
+    const [musicPlaying, setMusicPlaying] = useState(false);
+    const [musicMuted, setMusicMuted] = useState(() => {
+        if (typeof window !== 'undefined') {
+            return localStorage.getItem('mm20-music-muted') === 'true';
+        }
+        return false;
+    });
+    const musicParts = useRef<any[]>([]);
+    const musicSynths = useRef<any[]>([]);
+
+    // Save data
     const [bestTime, setBestTime] = useState<number | null>(null);
 
     useEffect(() => {
-        if (!auth) return;
-        signInAnonymously(auth).catch((error) => console.error("Auth error:", error));
-        const unsubAuth = onAuthStateChanged(auth, user => user && setUserId(user.uid));
-        return () => unsubAuth();
-    }, []);
-
-    useEffect(() => {
-        if (!db || !userId) return;
-        const docPath = `artifacts/math-master-hard-numbers/users/${userId}/stats/main`;
-        const unsubDb = onSnapshot(doc(db, docPath), (docSnap) => {
-            if (docSnap.exists()) setBestTime(docSnap.data().bestTime || null);
-        });
-        return () => unsubDb();
-    }, [userId]);
+        if (!category) return;
+        const save = getActiveSave();
+        if (save) {
+            setBestTime(save.stats[category]?.bestTime ?? null);
+        }
+    }, [category]);
 
 
     const startNewGame = useCallback(() => {
@@ -392,22 +374,112 @@ export default function PracticeSessionPage() {
             if (toneReady.current) {
                 // @ts-ignore
                 await window.Tone.start();
+                if (!musicMuted) startMusic();
             }
         }
         initAudio();
 
     }, [category]);
 
+    // --- Retro Chiptune Music ---
+    const startMusic = useCallback(() => {
+        // @ts-ignore
+        const T = window.Tone;
+        if (!T || musicParts.current.length > 0) return;
+
+        // Stop transport first if running
+        T.Transport.stop();
+        T.Transport.cancel();
+        T.Transport.bpm.value = 140;
+
+        // Square-wave melody synth (classic 8-bit)
+        const melodySynth = new T.Synth({
+            oscillator: { type: 'square' },
+            envelope: { attack: 0.01, decay: 0.15, sustain: 0.3, release: 0.1 },
+            volume: -14,
+        }).toDestination();
+
+        // Pulse bass synth
+        const bassSynth = new T.Synth({
+            oscillator: { type: 'square' },
+            envelope: { attack: 0.01, decay: 0.2, sustain: 0.4, release: 0.05 },
+            volume: -18,
+        }).toDestination();
+
+        // Catchy 8-bar melody loop (C major / upbeat)
+        const melodyNotes = [
+            'E5', 'G5', 'C6', 'G5', 'E5', 'D5', 'C5', 'D5',
+            'E5', 'G5', 'A5', 'G5', 'E5', null, 'C5', 'D5',
+            'F5', 'A5', 'C6', 'A5', 'F5', 'E5', 'D5', 'E5',
+            'G5', 'F5', 'E5', 'D5', 'C5', null, 'E5', 'G5',
+        ];
+
+        const bassNotes = [
+            'C3', null, 'G3', null, 'C3', null, 'E3', null,
+            'F3', null, 'C3', null, 'G3', null, 'E3', null,
+            'F3', null, 'A3', null, 'D3', null, 'G3', null,
+            'E3', null, 'G3', null, 'C3', null, null, null,
+        ];
+
+        const melodySeq = new T.Sequence((time: number, note: string | null) => {
+            if (note) melodySynth.triggerAttackRelease(note, '16n', time);
+        }, melodyNotes, '8n');
+
+        const bassSeq = new T.Sequence((time: number, note: string | null) => {
+            if (note) bassSynth.triggerAttackRelease(note, '8n', time);
+        }, bassNotes, '8n');
+
+        melodySeq.loop = true;
+        bassSeq.loop = true;
+        melodySeq.start(0);
+        bassSeq.start(0);
+        T.Transport.start();
+
+        musicParts.current = [melodySeq, bassSeq];
+        musicSynths.current = [melodySynth, bassSynth];
+        setMusicPlaying(true);
+    }, []);
+
+    const stopMusic = useCallback(() => {
+        // @ts-ignore
+        const T = window.Tone;
+        musicParts.current.forEach(p => { p.stop(); p.dispose(); });
+        musicSynths.current.forEach(s => s.dispose());
+        musicParts.current = [];
+        musicSynths.current = [];
+        if (T) { T.Transport.stop(); T.Transport.cancel(); }
+        setMusicPlaying(false);
+    }, []);
+
+    const toggleMusic = useCallback(async () => {
+        // @ts-ignore
+        const T = window.Tone;
+        if (T) await T.start();
+        if (musicPlaying) {
+            stopMusic();
+            setMusicMuted(true);
+            localStorage.setItem('mm20-music-muted', 'true');
+        } else {
+            setMusicMuted(false);
+            localStorage.setItem('mm20-music-muted', 'false');
+            startMusic();
+        }
+    }, [musicPlaying, startMusic, stopMusic]);
+
     useEffect(() => {
         startNewGame();
         return () => {
             if (timerInterval.current) clearInterval(timerInterval.current);
+            stopMusic();
         };
     }, [startNewGame]);
 
     const endGame = useCallback((completed: boolean) => {
         if (timerInterval.current) clearInterval(timerInterval.current);
         const timeElapsed = (Date.now() - startTime.current) / 1000;
+
+        // Stop music when game ends
+        stopMusic();
 
         setFinalTime(timeElapsed);
         setWasCompleted(completed);
@@ -421,15 +493,22 @@ export default function PracticeSessionPage() {
                 synth.current?.triggerAttackRelease(["C4", "E4", "G4", "C5"], "8n", now);
                 synth.current?.triggerAttackRelease(["E4", "G4", "C5", "E5"], "4n", now + 0.2);
             }
+        }
 
-            if (db && userId && (!bestTime || timeElapsed < bestTime)) {
-                const docRef = doc(db, `artifacts/math-master-hard-numbers/users/${userId}/stats/main`);
-                updateDoc(docRef, { bestTime: timeElapsed }).catch(() => {
-                    setDoc(docRef, { bestTime: timeElapsed });
-                });
+        // Save to localStorage
+        if (category) {
+            const updatedSave = recordGame({
+                category,
+                correct: correctCount + (completed ? 0 : 0), // correctCount is already set
+                total: totalQuestions,
+                timeElapsed,
+                completed,
+            });
+            if (updatedSave) {
+                setBestTime(updatedSave.stats[category]?.bestTime ?? null);
             }
         }
-    }, [correctCount, bestTime, userId, db]);
+    }, [correctCount, category]);
 
 
     useEffect(() => {
@@ -448,7 +527,13 @@ export default function PracticeSessionPage() {
             setCorrectCount(prev => prev + 1);
             if (toneReady.current) synth.current?.triggerAttackRelease(["C5", "E5"], "16n");
         } else {
-            if (toneReady.current) synth.current?.triggerAttackRelease("G2", "8n");
+            if (toneReady.current && synth.current) {
+                // @ts-ignore
+                const Tone = window.Tone;
+                const now = Tone.now();
+                synth.current.triggerAttackRelease(["E4", "G4"], "16n", now);
+                synth.current.triggerAttackRelease(["C3", "E3"], "8n", now + 0.12);
+            }
             setIsShaking(true);
             setTimeout(() => setIsShaking(false), 300);
         }
@@ -492,8 +577,15 @@ export default function PracticeSessionPage() {
             <div id="app" className="w-full min-h-screen sm:min-h-0 sm:max-w-lg sm:mx-auto sm:my-8 bg-white sm:rounded-2xl sm:shadow-2xl overflow-hidden sm:border sm:border-slate-100 relative">
                 <div className={`bg-indigo-600 p-6 text-white transition-colors duration-500 relative overflow-hidden`} id="header-bg">
                     <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white opacity-10 rounded-full blur-xl"></div>
-                    <div className="flex justify-between items-center mb-6 relative z-10">
-                        <h1 className="text-xl font-bold tracking-tight">{category.charAt(0).toUpperCase() + category.slice(1)}</h1>
+                    <div className="flex justify-between items-center mb-6 relative z-10 gap-3">
+                        <h1 className="text-xl font-bold tracking-tight truncate min-w-0">{category.charAt(0).toUpperCase() + category.slice(1)}</h1>
+                        <button
+                            onClick={toggleMusic}
+                            className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full bg-indigo-500/40 hover:bg-indigo-500/60 backdrop-blur-sm border border-indigo-400/30 transition-all active:scale-90 text-lg"
+                            title={musicPlaying ? 'Silenciar música' : 'Activar música'}
+                        >
+                            {musicPlaying ? '🎵' : '🔇'}
+                        </button>
                     </div>
                     <div className="grid grid-cols-2 gap-3 relative z-10">
                         <div className="text-center bg-indigo-700/50 backdrop-blur-md p-3 rounded-2xl border border-indigo-500/30">

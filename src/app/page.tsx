@@ -2,38 +2,22 @@
 
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
-import { initializeApp, type FirebaseApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, type Auth } from 'firebase/auth';
-import { getFirestore, doc, onSnapshot, type Firestore } from 'firebase/firestore';
-
-// NOTE: Add your Firebase config here
-const firebaseConfig = {
-  // apiKey: "...",
-  // authDomain: "...",
-  // projectId: "...",
-};
-
-let app: FirebaseApp | undefined;
-let auth: Auth | undefined;
-let db: Firestore | undefined;
-try {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-} catch (e) {
-  console.warn("Firebase no configurado. La persistencia de datos no funcionará.");
-}
+import { useRouter } from 'next/navigation';
+import { getActiveSave } from '@/lib/saveManager';
+import type { SaveSlot, Category } from '@/lib/types';
 
 const CategoryButton = ({
   href,
   title,
   time,
   focus,
+  bestTime,
 }: {
   href: string;
   title: string;
   time: string;
   focus: string;
+  bestTime?: number | null;
 }) => (
   <Link
     href={href}
@@ -41,7 +25,12 @@ const CategoryButton = ({
   >
     <div className="text-left">
       <span className="block font-bold text-slate-700 text-lg">{title}</span>
-      <span className="text-xs text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded text-[10px]">{time}</span>
+      <div className="flex items-center gap-2 mt-0.5">
+        <span className="text-xs text-slate-400 font-medium bg-slate-100 px-2 py-0.5 rounded text-[10px]">{time}</span>
+        {bestTime !== null && bestTime !== undefined && (
+          <span className="text-xs text-emerald-500 font-bold bg-emerald-50 px-2 py-0.5 rounded text-[10px]">⚡ {bestTime.toFixed(1)}s</span>
+        )}
+      </div>
       <span className="text-xs text-indigo-500 block mt-1">{focus}</span>
     </div>
     <span className="text-slate-300 group-hover:text-indigo-500 text-2xl transition-colors">→</span>
@@ -49,35 +38,25 @@ const CategoryButton = ({
 );
 
 export default function Home() {
-  const [userId, setUserId] = useState<string | null>(null);
-  const [bestTime, setBestTime] = useState<number | null>(null);
+  const router = useRouter();
+  const [save, setSave] = useState<SaveSlot | null>(null);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    if (!auth) return;
-    signInAnonymously(auth).catch((error) => {
-      console.error("Error en auth anónimo:", error);
-    });
+    const s = getActiveSave();
+    if (!s) {
+      router.push('/save-select');
+      return;
+    }
+    setSave(s);
+    setMounted(true);
+  }, [router]);
 
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setUserId(user.uid);
-      }
-    });
+  if (!mounted || !save) return null;
 
-    return () => unsubscribeAuth();
-  }, []);
+  const accuracy = save.totalQuestions > 0 ? Math.round((save.totalCorrect / save.totalQuestions) * 100) : 0;
 
-  useEffect(() => {
-    if (!db || !userId) return;
-    const docPath = `artifacts/math-master-hard-numbers/users/${userId}/stats/main`;
-    const unsubscribeDb = onSnapshot(doc(db, docPath), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setBestTime(data.bestTime || null);
-      }
-    });
-    return () => unsubscribeDb();
-  }, [userId]);
+  const getBestTime = (cat: Category) => save.stats[cat]?.bestTime ?? null;
 
   return (
     <div id="app" className="w-full min-h-screen sm:min-h-0 sm:max-w-lg sm:mx-auto sm:my-8 bg-white sm:rounded-2xl sm:shadow-2xl overflow-hidden sm:border sm:border-slate-100 relative">
@@ -87,22 +66,27 @@ export default function Home() {
           <h1 className="text-xl font-bold tracking-tight flex items-center gap-2">
             <span>MathMaster 20</span>
           </h1>
-          <div className="bg-white/20 backdrop-blur-sm px-3 py-1 rounded-full border border-white/10">
-            <span className="text-[10px] font-mono opacity-90" id="user-id-display">
-              {userId ? `ID: ${userId.slice(0, 6)}` : 'Conectando...'}
+          <button
+            onClick={() => router.push('/save-select')}
+            className="bg-white/20 backdrop-blur-sm px-3 py-1 rounded-full border border-white/10 hover:bg-white/30 transition-all"
+          >
+            <span className="text-[10px] font-mono opacity-90">
+              💾 {save.playerName}
             </span>
-          </div>
+          </button>
         </div>
-        <div className="grid grid-cols-2 gap-3 relative z-10">
+        <div className="grid grid-cols-3 gap-3 relative z-10">
           <div className="text-center bg-indigo-700/50 backdrop-blur-md p-3 rounded-2xl border border-indigo-500/30">
-            <p className="text-indigo-200 text-[9px] uppercase font-bold tracking-widest mb-1">ACIERTOS</p>
-            <p id="score" className="text-2xl font-black tabular-nums">0 / 20</p>
+            <p className="text-indigo-200 text-[9px] uppercase font-bold tracking-widest mb-1">Partidas</p>
+            <p id="score" className="text-2xl font-black tabular-nums">{save.totalGames}</p>
           </div>
           <div className="text-center bg-indigo-700/50 backdrop-blur-md p-3 rounded-2xl border border-indigo-500/30">
-            <p className="text-indigo-200 text-[9px] uppercase font-bold tracking-widest mb-1">MEJOR TIEMPO</p>
-            <p id="best-time" className="text-2xl font-black tabular-nums">
-              {bestTime ? `${bestTime.toFixed(1)}s` : '--:--'}
-            </p>
+            <p className="text-indigo-200 text-[9px] uppercase font-bold tracking-widest mb-1">Precisión</p>
+            <p className="text-2xl font-black tabular-nums">{accuracy}%</p>
+          </div>
+          <div className="text-center bg-indigo-700/50 backdrop-blur-md p-3 rounded-2xl border border-indigo-500/30">
+            <p className="text-indigo-200 text-[9px] uppercase font-bold tracking-widest mb-1">Aciertos</p>
+            <p id="best-time" className="text-2xl font-black tabular-nums">{save.totalCorrect}</p>
           </div>
         </div>
       </div>
@@ -114,10 +98,26 @@ export default function Home() {
             <h2 className="text-2xl font-bold text-slate-800">Entrenamiento Mental</h2>
             <p className="text-slate-500 text-sm mt-1">Supera las 20 preguntas antes de que se agote el tiempo.</p>
           </div>
-          <CategoryButton href="/practice/multiplication" title="Multiplicación" time="2:00 MIN" focus="Enfoque: Tablas 6, 7, 8, 9" />
-          <CategoryButton href="/practice/addition" title="Sumas" time="2:00 MIN" focus="Enfoque: Llevadas difíciles" />
-          <CategoryButton href="/practice/divisibility" title="Divisibilidad" time="1:30 MIN" focus="Enfoque: Reglas del 3 y 9" />
-          <CategoryButton href="/practice/fractions" title="Fracciones" time="2:00 MIN" focus="Enfoque: Simplificar, comparar, operar" />
+          <CategoryButton href="/practice/multiplication" title="Multiplicación" time="2:00 MIN" focus="Enfoque: Tablas 6, 7, 8, 9" bestTime={getBestTime('multiplication')} />
+          <CategoryButton href="/practice/addition" title="Sumas" time="2:00 MIN" focus="Enfoque: Llevadas difíciles" bestTime={getBestTime('addition')} />
+          <CategoryButton href="/practice/divisibility" title="Divisibilidad" time="1:30 MIN" focus="Enfoque: Reglas del 3 y 9" bestTime={getBestTime('divisibility')} />
+          <CategoryButton href="/practice/fractions" title="Fracciones" time="2:00 MIN" focus="Enfoque: Simplificar, comparar, operar" bestTime={getBestTime('fractions')} />
+
+          {/* Stats & Switch Player */}
+          <div className="pt-4 flex gap-3">
+            <Link
+              href="/stats"
+              className="flex-1 py-3 text-center bg-slate-50 border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50/50 rounded-2xl font-bold text-sm text-slate-500 hover:text-indigo-600 transition-all"
+            >
+              📊 Estadísticas
+            </Link>
+            <button
+              onClick={() => router.push('/save-select')}
+              className="flex-1 py-3 text-center bg-slate-50 border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50/50 rounded-2xl font-bold text-sm text-slate-500 hover:text-indigo-600 transition-all"
+            >
+              💾 Cambiar Jugador
+            </button>
+          </div>
         </div>
       </div>
     </div>
