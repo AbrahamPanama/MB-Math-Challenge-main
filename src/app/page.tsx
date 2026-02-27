@@ -117,6 +117,7 @@ export default function Home() {
           <CategoryButton href="/practice/multiplication" title="Multiplicación" time="2:00 MIN" focus="Enfoque: Tablas 6, 7, 8, 9" />
           <CategoryButton href="/practice/addition" title="Sumas" time="2:00 MIN" focus="Enfoque: Llevadas difíciles" />
           <CategoryButton href="/practice/divisibility" title="Divisibilidad" time="1:30 MIN" focus="Enfoque: Reglas del 3 y 9" />
+          <CategoryButton href="/practice/fractions" title="Fracciones" time="2:00 MIN" focus="Enfoque: Simplificar, comparar, operar" />
         </div>
       </div>
     </div>

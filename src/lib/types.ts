@@ -1,4 +1,4 @@
-export type Category = 'multiplication' | 'addition' | 'divisibility';
+export type Category = 'multiplication' | 'addition' | 'divisibility' | 'fractions';
 
 export type Problem = {
   text: string;
