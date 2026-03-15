@@ -103,20 +103,28 @@ export default function Home() {
           <CategoryButton href="/practice/divisibility" title="Divisibilidad" time="1:30 MIN" focus="Enfoque: Reglas del 3 y 9" bestTime={getBestTime('divisibility')} />
           <CategoryButton href="/practice/fractions" title="Fracciones" time="2:00 MIN" focus="Enfoque: Simplificar, comparar, operar" bestTime={getBestTime('fractions')} />
 
-          {/* Stats & Switch Player */}
-          <div className="pt-4 flex gap-3">
+          {/* Stats, Teoría & Switch Player */}
+          <div className="pt-4 flex flex-col gap-3">
+            <div className="flex gap-3">
+              <Link
+                href="/stats"
+                className="flex-1 py-3 text-center bg-slate-50 border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50/50 rounded-2xl font-bold text-sm text-slate-500 hover:text-indigo-600 transition-all"
+              >
+                📊 Estadísticas
+              </Link>
+              <button
+                onClick={() => router.push('/save-select')}
+                className="flex-1 py-3 text-center bg-slate-50 border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50/50 rounded-2xl font-bold text-sm text-slate-500 hover:text-indigo-600 transition-all"
+              >
+                💾 Cambiar Jugador
+              </button>
+            </div>
             <Link
-              href="/stats"
-              className="flex-1 py-3 text-center bg-slate-50 border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50/50 rounded-2xl font-bold text-sm text-slate-500 hover:text-indigo-600 transition-all"
+              href="/teoria"
+              className="w-full py-3 text-center bg-indigo-50 border-2 border-indigo-100 hover:border-indigo-500 hover:bg-indigo-100 rounded-2xl font-bold text-sm text-indigo-500 hover:text-indigo-700 transition-all"
             >
-              📊 Estadísticas
+              📐 Teoría
             </Link>
-            <button
-              onClick={() => router.push('/save-select')}
-              className="flex-1 py-3 text-center bg-slate-50 border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50/50 rounded-2xl font-bold text-sm text-slate-500 hover:text-indigo-600 transition-all"
-            >
-              💾 Cambiar Jugador
-            </button>
           </div>
         </div>
       </div>
