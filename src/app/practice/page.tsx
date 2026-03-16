@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Wrench, ArrowRight, LoaderCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -12,13 +13,22 @@ import {
   CardDescription,
   CardContent,
 } from '@/components/ui/card';
-import { mockSkills } from '@/lib/data';
+import { getActiveSave, getSkillSummaries } from '@/lib/saveManager';
+import type { Skill } from '@/lib/types';
 import { Suspense } from 'react';
 
 function PracticeContent() {
   const { t } = useLanguage();
   const searchParams = useSearchParams();
   const mode = searchParams.get('mode');
+  const [skills, setSkills] = useState<Skill[]>([]);
+
+  useEffect(() => {
+    const save = getActiveSave();
+    if (save) {
+      setSkills(getSkillSummaries(save));
+    }
+  }, []);
 
   if (mode === 'smart-practice') {
     return (
@@ -27,7 +37,7 @@ function PracticeContent() {
           {t('practice.selectSkill')}
         </h1>
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {mockSkills.map((skill) => (
+          {skills.map((skill) => (
             <Card
               key={skill.id}
               className="flex flex-col shadow-md transition-shadow hover:shadow-lg"

@@ -2,14 +2,15 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { getSaveSlots, createSave, deleteSave, setActiveSlot, getOverallAccuracy, formatTimeAgo } from '@/lib/saveManager';
-import type { SaveSlot } from '@/lib/types';
+import { getSaveSlots, createSave, deleteSave, setActiveSlot, getOverallAccuracy, formatTimeAgo, getGradeLabel } from '@/lib/saveManager';
+import type { SaveSlot, GradeLevel } from '@/lib/types';
 
 export default function SaveSelectPage() {
     const router = useRouter();
     const [slots, setSlots] = useState<(SaveSlot | null)[]>([null, null, null]);
     const [creating, setCreating] = useState<number | null>(null);
     const [playerName, setPlayerName] = useState('');
+    const [gradeLevel, setGradeLevel] = useState<GradeLevel>(4);
     const [deleting, setDeleting] = useState<number | null>(null);
     const [mounted, setMounted] = useState(false);
 
@@ -21,11 +22,12 @@ export default function SaveSelectPage() {
     const handleCreate = (slotIndex: number) => {
         setCreating(slotIndex);
         setPlayerName('');
+        setGradeLevel(4);
     };
 
     const confirmCreate = () => {
         if (creating === null) return;
-        createSave(creating, playerName);
+        createSave(creating, playerName, gradeLevel);
         setSlots(getSaveSlots());
         setCreating(null);
         router.push('/');
@@ -82,6 +84,7 @@ export default function SaveSelectPage() {
                                         <span className="text-indigo-400 text-[10px] font-bold uppercase tracking-wider bg-indigo-50 px-2 py-0.5 rounded">Slot {i + 1}</span>
                                         <span className="text-slate-800 font-bold text-lg">{slot.playerName}</span>
                                     </div>
+                                    <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">{getGradeLabel(slot.gradeLevel ?? 6)}</span>
                                     <span className="text-xs text-slate-400">{formatTimeAgo(slot.lastPlayed)}</span>
                                 </div>
 
@@ -148,6 +151,25 @@ export default function SaveSelectPage() {
                             className="w-full bg-slate-50 border-2 border-slate-200 focus:border-indigo-500 rounded-xl px-4 py-3 text-slate-800 font-bold text-lg outline-none transition-colors placeholder:text-slate-300"
                             onKeyDown={(e) => e.key === 'Enter' && confirmCreate()}
                         />
+
+                        <div className="mt-4">
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Grado escolar</p>
+                            <div className="grid grid-cols-4 gap-2">
+                                {([3, 4, 5, 6] as GradeLevel[]).map((g) => (
+                                    <button
+                                        key={g}
+                                        onClick={() => setGradeLevel(g)}
+                                        className={`py-2.5 rounded-xl text-sm font-bold transition-all border-2 ${
+                                            gradeLevel === g
+                                                ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-200 scale-105'
+                                                : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-indigo-300 hover:text-indigo-600'
+                                        }`}
+                                    >
+                                        {g}.°
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
 
                         <div className="flex gap-3 mt-5">
                             <button

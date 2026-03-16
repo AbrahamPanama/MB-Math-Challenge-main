@@ -94,6 +94,10 @@
     "divisibility": {
       "name": "Divisibility Rules",
       "description": "Learn the rules for 2, 3, 5, and more."
+    },
+    "combined": {
+      "name": "Combined Ops",
+      "description": "Order of hierarchy: (), [], {}."
     }
   }
 }

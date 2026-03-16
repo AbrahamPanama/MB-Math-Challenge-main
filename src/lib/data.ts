@@ -19,7 +19,7 @@ export const mockSkills: Skill[] = [
     mastery: { stars: 2, progress: 75 },
   },
   {
-    id: 'addition_subtraction',
+    id: 'addition',
     nameKey: 'skillsData.addition_subtraction.name',
     descriptionKey: 'skillsData.addition_subtraction.description',
     mastery: { stars: 3, progress: 100 },
@@ -35,6 +35,12 @@ export const mockSkills: Skill[] = [
     nameKey: 'skillsData.divisibility.name',
     descriptionKey: 'skillsData.divisibility.description',
     mastery: { stars: 0, progress: 15 },
+  },
+  {
+    id: 'combined',
+    nameKey: 'skillsData.combined.name',
+    descriptionKey: 'skillsData.combined.description',
+    mastery: { stars: 1, progress: 30 },
   },
 ];
 

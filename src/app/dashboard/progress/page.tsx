@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { Award, Flame, Sparkles } from 'lucide-react';
 import {
   Card,
@@ -8,28 +9,39 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { ProgressChart } from '@/components/dashboard/progress-chart';
-import { mockUserProgress } from '@/lib/data';
 import { useLanguage } from '@/context/language-context';
+import { getActiveSave, getUserProgressFromSave } from '@/lib/saveManager';
+import type { UserProgress } from '@/lib/types';
 
 export default function ProgressPage() {
   const { t } = useLanguage();
+  const [progress, setProgress] = useState<UserProgress | null>(null);
+
+  useEffect(() => {
+    const save = getActiveSave();
+    if (save) {
+      setProgress(getUserProgressFromSave(save));
+    }
+  }, []);
+
+  if (!progress) return null;
 
   const stats = [
     {
       title: t('progress.currentStreak'),
-      value: `${mockUserProgress.streak} ${t('progress.days')}`,
+      value: `${progress.streak} ${t('progress.days')}`,
       icon: Flame,
       color: 'text-accent',
     },
     {
       title: t('progress.totalXP'),
-      value: mockUserProgress.xp.toLocaleString(),
+      value: progress.xp.toLocaleString(),
       icon: Sparkles,
       color: 'text-primary',
     },
     {
       title: t('progress.skillsMastered'),
-      value: mockUserProgress.skillsMastered,
+      value: progress.skillsMastered,
       icon: Award,
       color: 'text-green-500',
     },
@@ -59,7 +71,7 @@ export default function ProgressPage() {
               <CardTitle>{t('progress.weeklyXP')}</CardTitle>
             </CardHeader>
             <CardContent className="pl-2">
-              <ProgressChart data={mockUserProgress.weeklyProgress} />
+              <ProgressChart data={progress.weeklyProgress} />
             </CardContent>
           </Card>
         </div>

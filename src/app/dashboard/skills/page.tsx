@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { Star, ArrowRight } from 'lucide-react';
 import {
   Card,
@@ -10,10 +11,11 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import { mockSkills } from '@/lib/data';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 import { useLanguage } from '@/context/language-context';
+import { getActiveSave, getSkillSummaries } from '@/lib/saveManager';
+import type { Skill } from '@/lib/types';
 
 function MasteryStars({ count }: { count: number }) {
   return (
@@ -32,12 +34,20 @@ function MasteryStars({ count }: { count: number }) {
 
 export default function SkillsPage() {
   const { t } = useLanguage();
+  const [skills, setSkills] = useState<Skill[]>([]);
+
+  useEffect(() => {
+    const save = getActiveSave();
+    if (save) {
+      setSkills(getSkillSummaries(save));
+    }
+  }, []);
 
   return (
     <div className="flex min-h-screen w-full flex-col">
       <main className="flex flex-1 flex-col gap-4 p-4 md:gap-8 md:p-8">
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {mockSkills.map((skill) => (
+          {skills.map((skill) => (
             <Card key={skill.id} className="flex flex-col shadow-md hover:shadow-lg transition-shadow">
               <CardHeader>
                 <div className="flex items-center justify-between">

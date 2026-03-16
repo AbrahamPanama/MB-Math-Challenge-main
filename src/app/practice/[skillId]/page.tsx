@@ -1,690 +1,989 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import React, { useEffect, useRef, useState, useTransition } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import Script from 'next/script';
-import type { Category, Problem } from '@/lib/types';
-import { getActiveSave, recordGame } from '@/lib/saveManager';
+import {
+  Brain,
+  Lightbulb,
+  LoaderCircle,
+  Repeat2,
+  Sparkles,
+  Target,
+} from 'lucide-react';
+import { generateHintAction, generateSessionInsightsAction } from '@/app/practice/actions';
+import {
+  TOTAL_QUESTIONS,
+  answerToString,
+  buildFallbackSessionDiagnostic,
+  buildPracticeQueue,
+  categoryLabels,
+  defaultGoalsByCategory,
+  fallbackHintForProblem,
+  generateOptions,
+  inferMisconceptionTags,
+  reflectionOptions,
+} from '@/lib/practice-engine';
+import {
+  getActiveSave,
+  getChallengeCounts,
+  getDueChallenges,
+  recordPracticeSession,
+  updateSessionInsights,
+  updateSessionReflection,
+} from '@/lib/saveManager';
+import type {
+  AttemptRecord,
+  Category,
+  GradeLevel,
+  HintUsage,
+  Problem,
+  SaveSlot,
+  SessionDiagnostic,
+} from '@/lib/types';
 
+type GameScreen = 'intro' | 'game' | 'result';
 
-type GameScreen = 'game' | 'result';
-
-// --- Game Logic ---
-// --- Fraction helpers ---
-const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b);
-const renderFrac = (n: number | string, d: number | string): string =>
-    `<div style="display:inline-flex;flex-direction:column;align-items:center;line-height:1;gap:2px;vertical-align:middle;"><span>${n}</span><div style="width:100%;height:3px;background:#1e293b;border-radius:2px;"></div><span>${d}</span></div>`;
-const renderFracInline = (n: number, d: number): string => `${n}/${d}`;
-const fracRow = (...parts: string[]): string =>
-    `<div style="display:flex;align-items:center;justify-content:center;gap:0.15em;">${parts.join('')}</div>`;
-
-const generateOptions = (correctAnswer: Problem['ans'], type: string): (string | number | boolean)[] => {
-    if (typeof correctAnswer === 'boolean') return [true, false];
-    let options: (string | number | boolean)[] = [correctAnswer];
-    let attempts = 0;
-    while (options.length < 5 && attempts < 50) {
-        attempts++;
-        let decoy: string | number | undefined;
-        if (type === 'reverse-mult') {
-            const parts = (correctAnswer as string).split(' × ');
-            const targetVal = parseInt(parts[0]) * parseInt(parts[1]);
-            let a = Math.floor(Math.random() * 11) + 2;
-            let b = Math.floor(Math.random() * 11) + 2;
-            let decoyStr = `${a} × ${b}`;
-            let decoyVal = a * b;
-            if (!options.includes(decoyStr) && Math.abs(decoyVal - targetVal) <= 15 && decoyVal !== targetVal) {
-                decoy = decoyStr;
-            }
-        } else if (type === 'reverse-add') {
-            const parts = (correctAnswer as string).split(' + ');
-            const targetVal = parseInt(parts[0]) + parseInt(parts[1]);
-            let a = Math.max(1, parseInt(parts[0]) + (Math.floor(Math.random() * 11) - 5));
-            let b = targetVal - a + (Math.floor(Math.random() * 7) - 3);
-            if (b < 1) b = Math.floor(Math.random() * 9) + 1;
-            let decoyStr = `${a} + ${b}`;
-            let decoyVal = a + b;
-            if (!options.includes(decoyStr) && decoyVal !== targetVal) {
-                decoy = decoyStr;
-            }
-        } else if (type === 'fraction-str') {
-            // Generate plausible wrong fraction strings
-            const parts = (correctAnswer as string).split('/');
-            const cn = parseInt(parts[0]);
-            const cd = parseInt(parts[1]);
-            const variations = [
-                [cn + 1, cd], [cn - 1, cd], [cn, cd + 1], [cn, cd - 1],
-                [cn + 1, cd + 1], [cn - 1, cd - 1], [cd, cn], [cn + 2, cd],
-            ];
-            const pick = variations[Math.floor(Math.random() * variations.length)];
-            if (pick[0] > 0 && pick[1] > 0 && `${pick[0]}/${pick[1]}` !== correctAnswer) {
-                decoy = `${pick[0]}/${pick[1]}`;
-            }
-        } else {
-            let diff = (Math.floor(Math.random() * 5) + 1) * (Math.random() > 0.5 ? 1 : -1);
-            decoy = (correctAnswer as number) + diff;
-        }
-        if (decoy !== undefined && (typeof decoy !== 'number' || decoy > 0) && !options.includes(decoy)) {
-            options.push(decoy);
-        }
-    }
-    return options.sort(() => Math.random() - 0.5);
+const TIME_LIMITS: Record<Category, number> = {
+  multiplication: 120,
+  addition: 120,
+  divisibility: 90,
+  fractions: 120,
+  combined: 180,
 };
 
-const generateProblem = (category: Category, questionIndex: number): Problem => {
-    let p: Problem = { text: '', ans: null, type: 'standard' };
-    const hardNumbers = [6, 7, 8, 9, 12];
-
-    if (category === 'multiplication') {
-        const isReverse = (questionIndex >= 10 && Math.random() > (questionIndex >= 15 ? 0.2 : 0.5));
-        let a, b;
-        if (questionIndex < 5) {
-            a = Math.floor(Math.random() * 9) + 2;
-            b = Math.floor(Math.random() * 9) + 2;
-        } else if (questionIndex < 15) {
-            a = hardNumbers[Math.floor(Math.random() * hardNumbers.length)];
-            b = Math.floor(Math.random() * 11) + 2;
-        } else {
-            a = hardNumbers[Math.floor(Math.random() * hardNumbers.length)];
-            b = hardNumbers[Math.floor(Math.random() * hardNumbers.length)];
-        }
-        if (isReverse) {
-            const result = a * b;
-            p.text = `<span class="text-indigo-600 font-bold mr-2">${result}</span> =`;
-            p.ans = `${a} × ${b}`;
-            p.type = 'reverse-mult';
-        } else {
-            p.text = `${a} × ${b}`;
-            p.ans = a * b;
-            p.type = 'standard';
-        }
-    } else if (category === 'addition') {
-        const isReverse = (questionIndex >= 10 && Math.random() > (questionIndex >= 15 ? 0.2 : 0.5));
-        let a, b;
-        if (questionIndex < 5) {
-            // Early: mix of 1-digit and small 2-digit numbers
-            const roll = Math.random();
-            if (roll < 0.35) {
-                // Both 1-digit
-                a = Math.floor(Math.random() * 8) + 2;
-                b = Math.floor(Math.random() * 8) + 2;
-            } else if (roll < 0.75) {
-                // 1-digit + 2-digit (or vice versa)
-                a = Math.floor(Math.random() * 8) + 2;
-                b = Math.floor(Math.random() * 40) + 10;
-                if (Math.random() > 0.5) [a, b] = [b, a];
-            } else {
-                // Both 2-digit (easy)
-                a = Math.floor(Math.random() * 40) + 10;
-                b = Math.floor(Math.random() * 40) + 10;
-            }
-        } else if (questionIndex < 10) {
-            // Mid: 1-digit + 2-digit with harder numbers
-            const roll = Math.random();
-            if (roll < 0.4) {
-                // 1-digit + 2-digit
-                a = Math.floor(Math.random() * 8) + 2;
-                const ends = [7, 8, 9];
-                b = (Math.floor(Math.random() * 8) * 10) + ends[Math.floor(Math.random() * 3)];
-                if (Math.random() > 0.5) [a, b] = [b, a];
-            } else {
-                // Both 2-digit with carrying
-                const ends = [7, 8, 9];
-                a = (Math.floor(Math.random() * 8) * 10) + ends[Math.floor(Math.random() * 3)];
-                b = (Math.floor(Math.random() * 8) * 10) + ends[Math.floor(Math.random() * 3)];
-            }
-        } else {
-            // Late: harder 2-digit + 2-digit with carrying
-            const ends = [7, 8, 9];
-            a = (Math.floor(Math.random() * 8) * 10) + ends[Math.floor(Math.random() * 3)];
-            b = (Math.floor(Math.random() * 8) * 10) + ends[Math.floor(Math.random() * 3)];
-        }
-        if (isReverse) {
-            const result = a + b;
-            p.text = `<span style="color:#6366f1;font-weight:800;margin-right:0.15em;">${result}</span> =`;
-            p.ans = `${a} + ${b}`;
-            p.type = 'reverse-add';
-        } else {
-            p.text = `<div style="display:inline-flex;flex-direction:column;align-items:flex-end;font-variant-numeric:tabular-nums;line-height:1.15;letter-spacing:0.05em;">
-              <div>${a}</div>
-              <div style="display:flex;align-items:baseline;">
-                <span style="font-size:0.45em;color:#6366f1;margin-right:0.3em;">+</span>
-                <span>${b}</span>
-              </div>
-              <div style="width:100%;height:4px;background:#1e293b;margin-top:6px;border-radius:2px;"></div>
-            </div>`;
-            p.ans = a + b;
-            p.type = 'standard';
-        }
-    } else if (category === 'divisibility') {
-        let divisor: number;
-        if (questionIndex < 8) divisor = [2, 5, 10][Math.floor(Math.random() * 3)];
-        else divisor = [3, 9][Math.floor(Math.random() * 2)];
-
-        const base = Math.floor(Math.random() * 50) + 10;
-        const isDiv = Math.random() > 0.5;
-        const num = isDiv ? base * divisor : (base * divisor) + (Math.floor(Math.random() * (divisor - 1)) + 1);
-        p.text = `<span class="text-slate-500 text-4xl align-middle mr-2">¿</span>${num} ÷ ${divisor}<span class="text-slate-500 text-4xl align-middle ml-2">?</span>`;
-        p.ans = (num % divisor === 0);
-    } else if (category === 'fractions') {
-        // Reverse chance increases with question index
-        const reverseChance = questionIndex < 5 ? 0.15 : questionIndex < 10 ? 0.3 : questionIndex < 15 ? 0.4 : 0.5;
-        const isReverse = Math.random() < reverseChance;
-
-        // Pick question type based on difficulty tier
-        const easyTypes = ['frac-of-number', 'simplify', 'equivalent'];
-        const medTypes = ['compare', 'add-same-denom', 'simplify', 'equivalent', 'frac-of-number'];
-        const hardTypes = ['add-diff-denom', 'add-same-denom', 'compare', 'frac-of-number', 'simplify'];
-
-        let questionType: string;
-        if (questionIndex < 7) {
-            questionType = easyTypes[Math.floor(Math.random() * easyTypes.length)];
-        } else if (questionIndex < 14) {
-            questionType = medTypes[Math.floor(Math.random() * medTypes.length)];
-        } else {
-            questionType = hardTypes[Math.floor(Math.random() * hardTypes.length)];
-        }
-
-        // Difficulty-scaled denominators
-        const easyDenoms = [2, 3, 4, 5];
-        const medDenoms = [2, 3, 4, 5, 6, 8];
-        const hardDenoms = [3, 4, 5, 6, 7, 8, 9, 10, 12];
-        const denoms = questionIndex < 7 ? easyDenoms : questionIndex < 14 ? medDenoms : hardDenoms;
-        const pickDenom = () => denoms[Math.floor(Math.random() * denoms.length)];
-
-        if (questionType === 'frac-of-number') {
-            const d = pickDenom();
-            const n = 1 + Math.floor(Math.random() * (d - 1)); // numerator < denominator
-            const multiplier = questionIndex < 7 ? (Math.floor(Math.random() * 4) + 2) : (Math.floor(Math.random() * 6) + 2);
-            const whole = d * multiplier; // ensures clean result
-            const result = (n * whole) / d;
-            if (isReverse) {
-                p.text = fracRow(`<span style="color:#6366f1;font-weight:800;">${result}</span>`, `<span style="font-size:0.5em;color:#94a3b8;">= ${renderFracInline(n, d)} de ...</span>`);
-                p.ans = whole;
-                p.type = 'standard';
-            } else {
-                p.text = fracRow(renderFrac(n, d), `<span style="font-size:0.5em;color:#94a3b8;margin:0 0.2em;">de</span>`, `<span style="font-weight:800;">${whole}</span>`);
-                p.ans = result;
-                p.type = 'standard';
-            }
-        } else if (questionType === 'simplify') {
-            const d = pickDenom();
-            const n = 1 + Math.floor(Math.random() * (d - 1));
-            const g = gcd(n, d);
-            const simplN = n / g;
-            const simplD = d / g;
-            // Multiply by a factor so the student has to simplify
-            const factor = 2 + Math.floor(Math.random() * (questionIndex < 7 ? 3 : 5));
-            const shownN = simplN * factor;
-            const shownD = simplD * factor;
-            if (isReverse) {
-                p.text = fracRow(renderFrac(simplN, simplD), `<span style="font-size:0.5em;color:#94a3b8;">= ?</span>`);
-                p.ans = renderFracInline(shownN, shownD);
-                p.type = 'fraction-str';
-            } else {
-                p.text = `<span style="font-size:0.45em;color:#94a3b8;">Simplifica</span><br>${renderFrac(shownN, shownD)}`;
-                p.ans = renderFracInline(simplN, simplD);
-                p.type = 'fraction-str';
-            }
-        } else if (questionType === 'equivalent') {
-            const d = pickDenom();
-            const n = 1 + Math.floor(Math.random() * (d - 1));
-            const factor = 2 + Math.floor(Math.random() * 4);
-            const targetD = d * factor;
-            const targetN = n * factor;
-            p.text = fracRow(renderFrac(n, d), `<span style="font-size:0.6em;color:#94a3b8;">=</span>`, renderFrac('?', targetD));
-            p.ans = targetN;
-            p.type = 'standard';
-        } else if (questionType === 'compare') {
-            // Generate two different fractions
-            const d1 = pickDenom();
-            const n1 = 1 + Math.floor(Math.random() * (d1 - 1));
-            let d2 = pickDenom();
-            while (d2 === d1) d2 = pickDenom();
-            let n2 = 1 + Math.floor(Math.random() * (d2 - 1));
-            // Ensure they're not equal
-            while (n1 / d1 === n2 / d2) {
-                n2 = 1 + Math.floor(Math.random() * (d2 - 1));
-            }
-            const val1 = n1 / d1;
-            const val2 = n2 / d2;
-            p.text = `<div style="font-size:0.45em;color:#94a3b8;text-align:center;margin-bottom:0.3em;">¿Cuál es mayor?</div>` + fracRow(renderFrac(n1, d1), `<span style="font-size:0.6em;color:#94a3b8;margin:0 0.3em;">ó</span>`, renderFrac(n2, d2));
-            p.ans = val1 > val2 ? renderFracInline(n1, d1) : renderFracInline(n2, d2);
-            p.type = 'fraction-str';
-        } else if (questionType === 'add-same-denom') {
-            const d = pickDenom();
-            const n1 = 1 + Math.floor(Math.random() * (d - 1));
-            let n2 = 1 + Math.floor(Math.random() * (d - 1));
-            // Keep sum <= d for proper fractions most of the time
-            while (n1 + n2 > d * 2) n2 = 1 + Math.floor(Math.random() * (d - 1));
-            const sumN = n1 + n2;
-            const g = gcd(sumN, d);
-            const ansN = sumN / g;
-            const ansD = d / g;
-            if (isReverse) {
-                p.text = fracRow(renderFrac(ansN, ansD), `<span style="font-size:0.5em;color:#94a3b8;">= ? + ?</span>`);
-                p.ans = `${renderFracInline(n1, d)} + ${renderFracInline(n2, d)}`;
-                p.type = 'fraction-str';
-            } else {
-                p.text = fracRow(renderFrac(n1, d), `<span style="font-size:0.6em;color:#6366f1;margin:0 0.15em;">+</span>`, renderFrac(n2, d));
-                p.ans = renderFracInline(ansN, ansD);
-                p.type = 'fraction-str';
-            }
-        } else if (questionType === 'add-diff-denom') {
-            let d1 = pickDenom();
-            let d2 = pickDenom();
-            while (d2 === d1) d2 = pickDenom();
-            const n1 = 1 + Math.floor(Math.random() * (d1 - 1));
-            const n2 = 1 + Math.floor(Math.random() * (d2 - 1));
-            const commonD = (d1 * d2) / gcd(d1, d2);
-            const sumN = n1 * (commonD / d1) + n2 * (commonD / d2);
-            const g = gcd(sumN, commonD);
-            const ansN = sumN / g;
-            const ansD = commonD / g;
-            if (isReverse) {
-                p.text = fracRow(renderFrac(ansN, ansD), `<span style="font-size:0.5em;color:#94a3b8;">= ? + ?</span>`);
-                p.ans = `${renderFracInline(n1, d1)} + ${renderFracInline(n2, d2)}`;
-                p.type = 'fraction-str';
-            } else {
-                p.text = fracRow(renderFrac(n1, d1), `<span style="font-size:0.6em;color:#6366f1;margin:0 0.15em;">+</span>`, renderFrac(n2, d2));
-                p.ans = renderFracInline(ansN, ansD);
-                p.type = 'fraction-str';
-            }
-        }
-    }
-    return p;
-};
-
+const isCategory = (value: string): value is Category =>
+  ['multiplication', 'addition', 'divisibility', 'fractions', 'combined'].includes(value);
 
 export default function PracticeSessionPage() {
-    const router = useRouter();
-    const params = useParams();
-    const category = params.skillId as Category;
+  const router = useRouter();
+  const params = useParams();
+  const rawCategory = String(params.skillId ?? '');
+  const category = isCategory(rawCategory) ? rawCategory : null;
 
-    const [screen, setScreen] = useState<GameScreen>('game');
-    const [correctCount, setCorrectCount] = useState(0);
-    const [questionIndex, setQuestionIndex] = useState(0);
-    const totalQuestions = 20;
+  const [screen, setScreen] = useState<GameScreen>('intro');
+  const [save, setSave] = useState<SaveSlot | null>(null);
+  const [gradeLevel, setGradeLevel] = useState<GradeLevel>(6);
+  const [bestTime, setBestTime] = useState<number | null>(null);
+  const [dueCount, setDueCount] = useState(0);
+  const [selectedGoal, setSelectedGoal] = useState('');
+  const [correctCount, setCorrectCount] = useState(0);
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const [queue, setQueue] = useState<ReturnType<typeof buildPracticeQueue>>([]);
+  const [currentProblem, setCurrentProblem] = useState<Problem | null>(null);
+  const [options, setOptions] = useState<Array<string | number | boolean>>([]);
+  const [feedback, setFeedback] = useState<{ text: string; correct: boolean } | null>(null);
+  const [hintText, setHintText] = useState<string | null>(null);
+  const [hintLevel, setHintLevel] = useState<HintUsage>(0);
+  const [maxTime, setMaxTime] = useState(90);
+  const [timeLeft, setTimeLeft] = useState(90);
+  const [finalTime, setFinalTime] = useState(0);
+  const [wasCompleted, setWasCompleted] = useState(false);
+  const [diagnostic, setDiagnostic] = useState<SessionDiagnostic | null>(null);
+  const [savedSessionId, setSavedSessionId] = useState<string | null>(null);
+  const [reflectionChoice, setReflectionChoice] = useState<string | null>(null);
+  const [reviewQuestionCount, setReviewQuestionCount] = useState(0);
+  const [challengeCreatedCount, setChallengeCreatedCount] = useState(0);
+  const [challengeMasteredCount, setChallengeMasteredCount] = useState(0);
+  const [isShaking, setIsShaking] = useState(false);
+  const [isGeneratingHint, startHintTransition] = useTransition();
+  const [isGeneratingInsights, startInsightsTransition] = useTransition();
 
-    const [currentProblem, setCurrentProblem] = useState<Problem | null>(null);
-    const [options, setOptions] = useState<(string | number | boolean)[]>([]);
-    const [feedback, setFeedback] = useState<{ text: string; correct: boolean } | null>(null);
-    const [isShaking, setIsShaking] = useState(false);
+  const timerInterval = useRef<NodeJS.Timeout | null>(null);
+  const startTime = useRef(0);
+  const questionStartedAt = useRef(0);
+  const sessionIdRef = useRef('');
+  const attemptsRef = useRef<AttemptRecord[]>([]);
+  const correctCountRef = useRef(0);
+  const queueRef = useRef<ReturnType<typeof buildPracticeQueue>>([]);
 
-    // Timer state
-    const [maxTime, setMaxTime] = useState(90);
-    const [timeLeft, setTimeLeft] = useState(90);
-    const timerInterval = useRef<NodeJS.Timeout | null>(null);
-    const startTime = useRef<number>(0);
+  const synth = useRef<any | null>(null);
+  const toneReady = useRef(false);
+  const musicParts = useRef<any[]>([]);
+  const musicSynths = useRef<any[]>([]);
+  const [musicPlaying, setMusicPlaying] = useState(false);
+  const [musicMuted, setMusicMuted] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('mm20-music-muted') === 'true';
+  });
 
-    // Result state
-    const [finalTime, setFinalTime] = useState(0);
-    const [wasCompleted, setWasCompleted] = useState(false);
+  useEffect(() => {
+    if (!category) {
+      router.push('/');
+      return;
+    }
+    const activeSave = getActiveSave();
+    if (!activeSave) {
+      router.push('/save-select');
+      return;
+    }
+    setSave(activeSave);
+    setGradeLevel(activeSave.gradeLevel ?? 6);
+    setBestTime(activeSave.stats[category]?.bestTime ?? null);
+    setDueCount(getDueChallenges(activeSave, category).length);
+    setSelectedGoal(
+      getDueChallenges(activeSave, category).length > 0
+        ? defaultGoalsByCategory[category][2]
+        : defaultGoalsByCategory[category][0]
+    );
+    setScreen('intro');
+  }, [category, router]);
 
-    // Audio
-    const synth = useRef<any | null>(null);
-    const toneReady = useRef(false);
-
-    // Music
-    const [musicPlaying, setMusicPlaying] = useState(false);
-    const [musicMuted, setMusicMuted] = useState(() => {
-        if (typeof window !== 'undefined') {
-            return localStorage.getItem('mm20-music-muted') === 'true';
-        }
-        return false;
-    });
-    const musicParts = useRef<any[]>([]);
-    const musicSynths = useRef<any[]>([]);
-
-    // Save data
-    const [bestTime, setBestTime] = useState<number | null>(null);
-
-    useEffect(() => {
-        if (!category) return;
-        const save = getActiveSave();
-        if (save) {
-            setBestTime(save.stats[category]?.bestTime ?? null);
-        }
-    }, [category]);
-
-
-    const startNewGame = useCallback(() => {
-        if (!category) return;
-        const timeLimits: Record<Category, number> = { multiplication: 120, addition: 120, divisibility: 90, fractions: 120 };
-        const newMaxTime = timeLimits[category] || 90;
-
-        setScreen('game');
-        setCorrectCount(0);
-        setQuestionIndex(0);
-        setMaxTime(newMaxTime);
-        setTimeLeft(newMaxTime);
-        setFeedback(null);
-
-        const problem = generateProblem(category, 0);
-        setCurrentProblem(problem);
-        setOptions(generateOptions(problem.ans, problem.type));
-
-        startTime.current = Date.now();
-        if (timerInterval.current) clearInterval(timerInterval.current);
-        timerInterval.current = setInterval(() => {
-            setTimeLeft(prev => prev - 1);
-        }, 1000);
-
-        // Init Audio
-        const initAudio = async () => {
-            if (toneReady.current) {
-                // @ts-ignore
-                await window.Tone.start();
-                if (!musicMuted) startMusic();
-            }
-        }
-        initAudio();
-
-    }, [category]);
-
-    // --- Retro Chiptune Music ---
-    const startMusic = useCallback(() => {
-        // @ts-ignore
-        const T = window.Tone;
-        if (!T || musicParts.current.length > 0) return;
-
-        // Stop transport first if running
-        T.Transport.stop();
-        T.Transport.cancel();
-        T.Transport.bpm.value = 140;
-
-        // Square-wave melody synth (classic 8-bit)
-        const melodySynth = new T.Synth({
-            oscillator: { type: 'square' },
-            envelope: { attack: 0.01, decay: 0.15, sustain: 0.3, release: 0.1 },
-            volume: -14,
-        }).toDestination();
-
-        // Pulse bass synth
-        const bassSynth = new T.Synth({
-            oscillator: { type: 'square' },
-            envelope: { attack: 0.01, decay: 0.2, sustain: 0.4, release: 0.05 },
-            volume: -18,
-        }).toDestination();
-
-        // Catchy 8-bar melody loop (C major / upbeat)
-        const melodyNotes = [
-            'E5', 'G5', 'C6', 'G5', 'E5', 'D5', 'C5', 'D5',
-            'E5', 'G5', 'A5', 'G5', 'E5', null, 'C5', 'D5',
-            'F5', 'A5', 'C6', 'A5', 'F5', 'E5', 'D5', 'E5',
-            'G5', 'F5', 'E5', 'D5', 'C5', null, 'E5', 'G5',
-        ];
-
-        const bassNotes = [
-            'C3', null, 'G3', null, 'C3', null, 'E3', null,
-            'F3', null, 'C3', null, 'G3', null, 'E3', null,
-            'F3', null, 'A3', null, 'D3', null, 'G3', null,
-            'E3', null, 'G3', null, 'C3', null, null, null,
-        ];
-
-        const melodySeq = new T.Sequence((time: number, note: string | null) => {
-            if (note) melodySynth.triggerAttackRelease(note, '16n', time);
-        }, melodyNotes, '8n');
-
-        const bassSeq = new T.Sequence((time: number, note: string | null) => {
-            if (note) bassSynth.triggerAttackRelease(note, '8n', time);
-        }, bassNotes, '8n');
-
-        melodySeq.loop = true;
-        bassSeq.loop = true;
-        melodySeq.start(0);
-        bassSeq.start(0);
-        T.Transport.start();
-
-        musicParts.current = [melodySeq, bassSeq];
-        musicSynths.current = [melodySynth, bassSynth];
-        setMusicPlaying(true);
-    }, []);
-
-    const stopMusic = useCallback(() => {
-        // @ts-ignore
-        const T = window.Tone;
-        musicParts.current.forEach(p => { p.stop(); p.dispose(); });
-        musicSynths.current.forEach(s => s.dispose());
-        musicParts.current = [];
-        musicSynths.current = [];
-        if (T) { T.Transport.stop(); T.Transport.cancel(); }
-        setMusicPlaying(false);
-    }, []);
-
-    const toggleMusic = useCallback(async () => {
-        // @ts-ignore
-        const T = window.Tone;
-        if (T) await T.start();
-        if (musicPlaying) {
-            stopMusic();
-            setMusicMuted(true);
-            localStorage.setItem('mm20-music-muted', 'true');
-        } else {
-            setMusicMuted(false);
-            localStorage.setItem('mm20-music-muted', 'false');
-            startMusic();
-        }
-    }, [musicPlaying, startMusic, stopMusic]);
-
-    useEffect(() => {
-        startNewGame();
-        return () => {
-            if (timerInterval.current) clearInterval(timerInterval.current);
-            stopMusic();
-        };
-    }, [startNewGame]);
-
-    const endGame = useCallback((completed: boolean) => {
-        if (timerInterval.current) clearInterval(timerInterval.current);
-        const timeElapsed = (Date.now() - startTime.current) / 1000;
-
-        // Stop music when game ends
-        stopMusic();
-
-        setFinalTime(timeElapsed);
-        setWasCompleted(completed);
-        setScreen('result');
-
-        if (completed && correctCount >= 18) {
-            if (toneReady.current && synth.current) {
-                // @ts-ignore
-                const Tone = window.Tone;
-                const now = Tone.now();
-                synth.current?.triggerAttackRelease(["C4", "E4", "G4", "C5"], "8n", now);
-                synth.current?.triggerAttackRelease(["E4", "G4", "C5", "E5"], "4n", now + 0.2);
-            }
-        }
-
-        // Save to localStorage
-        if (category) {
-            const updatedSave = recordGame({
-                category,
-                correct: correctCount + (completed ? 0 : 0), // correctCount is already set
-                total: totalQuestions,
-                timeElapsed,
-                completed,
-            });
-            if (updatedSave) {
-                setBestTime(updatedSave.stats[category]?.bestTime ?? null);
-            }
-        }
-    }, [correctCount, category]);
-
-
-    useEffect(() => {
-        if (timeLeft <= 0) {
-            endGame(false);
-        }
-    }, [timeLeft, endGame]);
-
-    const handleChoice = (userVal: string | number | boolean) => {
-        if (screen !== 'game' || !category) return;
-
-        const isCorrect = userVal === currentProblem?.ans;
-        setFeedback({ text: isCorrect ? '¡EXCELENTE!' : 'INCORRECTO', correct: isCorrect });
-
-        if (isCorrect) {
-            setCorrectCount(prev => prev + 1);
-            if (toneReady.current) synth.current?.triggerAttackRelease(["C5", "E5"], "16n");
-        } else {
-            if (toneReady.current && synth.current) {
-                // @ts-ignore
-                const Tone = window.Tone;
-                const now = Tone.now();
-                synth.current.triggerAttackRelease(["E4", "G4"], "16n", now);
-                synth.current.triggerAttackRelease(["C3", "E3"], "8n", now + 0.12);
-            }
-            setIsShaking(true);
-            setTimeout(() => setIsShaking(false), 300);
-        }
-
-        setTimeout(() => {
-            const nextIndex = questionIndex + 1;
-            if (nextIndex >= totalQuestions) {
-                endGame(true);
-            } else {
-                setQuestionIndex(nextIndex);
-                const nextProblem = generateProblem(category, nextIndex);
-                setCurrentProblem(nextProblem);
-                setOptions(generateOptions(nextProblem.ans, nextProblem.type));
-                setFeedback(null);
-            }
-        }, 500);
+  useEffect(() => {
+    return () => {
+      if (timerInterval.current) clearInterval(timerInterval.current);
+      stopMusic();
     };
+  }, []);
 
-    if (!currentProblem || !category) {
-        return null; // or a loading state
+  const stopMusic = () => {
+    // @ts-ignore
+    const Tone = window.Tone;
+    musicParts.current.forEach((part) => {
+      part.stop();
+      part.dispose();
+    });
+    musicSynths.current.forEach((instance) => instance.dispose());
+    musicParts.current = [];
+    musicSynths.current = [];
+    if (Tone) {
+      Tone.Transport.stop();
+      Tone.Transport.cancel();
+    }
+    setMusicPlaying(false);
+  };
+
+  const startMusic = async () => {
+    // @ts-ignore
+    const Tone = window.Tone;
+    if (!Tone || musicParts.current.length > 0) return;
+    await Tone.start();
+    Tone.Transport.stop();
+    Tone.Transport.cancel();
+    Tone.Transport.bpm.value = 140;
+
+    const melodySynth = new Tone.Synth({
+      oscillator: { type: 'square' },
+      envelope: { attack: 0.01, decay: 0.15, sustain: 0.3, release: 0.1 },
+      volume: -14,
+    }).toDestination();
+
+    const bassSynth = new Tone.Synth({
+      oscillator: { type: 'square' },
+      envelope: { attack: 0.01, decay: 0.2, sustain: 0.4, release: 0.05 },
+      volume: -18,
+    }).toDestination();
+
+    const melodyNotes = [
+      'E5',
+      'G5',
+      'C6',
+      'G5',
+      'E5',
+      'D5',
+      'C5',
+      'D5',
+      'E5',
+      'G5',
+      'A5',
+      'G5',
+      'E5',
+      null,
+      'C5',
+      'D5',
+    ];
+
+    const bassNotes = [
+      'C3',
+      null,
+      'G3',
+      null,
+      'C3',
+      null,
+      'E3',
+      null,
+      'F3',
+      null,
+      'C3',
+      null,
+      'G3',
+      null,
+      'E3',
+      null,
+    ];
+
+    const melodySeq = new Tone.Sequence((time: number, note: string | null) => {
+      if (note) melodySynth.triggerAttackRelease(note, '16n', time);
+    }, melodyNotes, '8n');
+
+    const bassSeq = new Tone.Sequence((time: number, note: string | null) => {
+      if (note) bassSynth.triggerAttackRelease(note, '8n', time);
+    }, bassNotes, '8n');
+
+    melodySeq.loop = true;
+    bassSeq.loop = true;
+    melodySeq.start(0);
+    bassSeq.start(0);
+    Tone.Transport.start();
+
+    musicParts.current = [melodySeq, bassSeq];
+    musicSynths.current = [melodySynth, bassSynth];
+    setMusicPlaying(true);
+  };
+
+  const toggleMusic = async () => {
+    // @ts-ignore
+    const Tone = window.Tone;
+    if (Tone) await Tone.start();
+    if (musicPlaying) {
+      stopMusic();
+      setMusicMuted(true);
+      localStorage.setItem('mm20-music-muted', 'true');
+    } else {
+      setMusicMuted(false);
+      localStorage.setItem('mm20-music-muted', 'false');
+      void startMusic();
+    }
+  };
+
+  const hydrateIntroState = (updatedSave: SaveSlot) => {
+    if (!category) return;
+    setSave(updatedSave);
+    setGradeLevel(updatedSave.gradeLevel);
+    setBestTime(updatedSave.stats[category]?.bestTime ?? null);
+    setDueCount(getDueChallenges(updatedSave, category).length);
+  };
+
+  const startSession = async () => {
+    if (!category || !save) return;
+
+    const refreshedSave = getActiveSave() ?? save;
+    const sessionOrdinal = refreshedSave.sessions.length + 1;
+    const dueChallenges = getDueChallenges(refreshedSave, category, sessionOrdinal);
+    const sessionQueue = buildPracticeQueue({
+      category,
+      grade: refreshedSave.gradeLevel,
+      dueChallenges,
+      sessionOrdinal,
+    });
+
+    queueRef.current = sessionQueue;
+    attemptsRef.current = [];
+    correctCountRef.current = 0;
+    sessionIdRef.current = crypto.randomUUID();
+    setQueue(sessionQueue);
+    setReviewQuestionCount(sessionQueue.filter((item) => item.source === 'review').length);
+    setQuestionIndex(0);
+    setCorrectCount(0);
+    setFeedback(null);
+    setDiagnostic(null);
+    setHintText(null);
+    setHintLevel(0);
+    setReflectionChoice(null);
+    setChallengeCreatedCount(0);
+    setChallengeMasteredCount(0);
+    setSavedSessionId(null);
+
+    const firstProblem = sessionQueue[0]?.problem ?? null;
+    setCurrentProblem(firstProblem);
+    setOptions(firstProblem ? generateOptions(firstProblem.ans, firstProblem.type) : []);
+
+    const nextMaxTime =
+      category === 'divisibility' && refreshedSave.gradeLevel === 5
+        ? 105
+        : TIME_LIMITS[category];
+    setMaxTime(nextMaxTime);
+    setTimeLeft(nextMaxTime);
+    setScreen('game');
+
+    startTime.current = Date.now();
+    questionStartedAt.current = Date.now();
+    if (timerInterval.current) clearInterval(timerInterval.current);
+    timerInterval.current = setInterval(() => {
+      setTimeLeft((previous) => previous - 1);
+    }, 1000);
+
+    if (toneReady.current && !musicMuted) {
+      void startMusic();
+    }
+  };
+
+  const finalizeSession = (completed: boolean) => {
+    if (!category) return;
+    if (timerInterval.current) clearInterval(timerInterval.current);
+    stopMusic();
+
+    const timeElapsedSec = (Date.now() - startTime.current) / 1000;
+    const sessionAttempts = [...attemptsRef.current];
+    const accuracy =
+      sessionAttempts.length > 0
+        ? Math.round((correctCountRef.current / sessionAttempts.length) * 100)
+        : 0;
+    const fallbackDiagnostic = buildFallbackSessionDiagnostic({
+      attempts: sessionAttempts,
+      goal: selectedGoal,
+      dueCount,
+    });
+
+    const sessionPayload = {
+      session: {
+        id: sessionIdRef.current,
+        category,
+        gradeLevel,
+        startedAt: new Date(startTime.current).toISOString(),
+        endedAt: new Date().toISOString(),
+        timeElapsedSec,
+        wasCompleted: completed,
+        totalQuestions: TOTAL_QUESTIONS,
+        correctCount: correctCountRef.current,
+        accuracy,
+        goal: selectedGoal,
+        reviewQuestions: reviewQuestionCount,
+        newQuestions: TOTAL_QUESTIONS - reviewQuestionCount,
+        challengeIdsTouched: [],
+        challengeIdsMastered: [],
+        challengeIdsCreated: [],
+        diagnostic: fallbackDiagnostic,
+      },
+      attempts: sessionAttempts,
+    } satisfies Parameters<typeof recordPracticeSession>[0];
+
+    const updatedSave = recordPracticeSession(sessionPayload);
+    const updatedSession = updatedSave?.sessions.at(-1) ?? null;
+
+    setFinalTime(timeElapsedSec);
+    setWasCompleted(completed);
+    setScreen('result');
+    setDiagnostic(updatedSession?.diagnostic ?? fallbackDiagnostic);
+    setSavedSessionId(updatedSession?.id ?? null);
+    setChallengeCreatedCount(updatedSession?.challengeIdsCreated.length ?? 0);
+    setChallengeMasteredCount(updatedSession?.challengeIdsMastered.length ?? 0);
+
+    if (updatedSave) {
+      hydrateIntroState(updatedSave);
     }
 
-    const timeBarPercent = (timeLeft / maxTime) * 100;
+    if (updatedSave && updatedSession && sessionAttempts.length > 0) {
+      const challengeDrafts = updatedSave.challenges
+        .filter((challenge) => updatedSession.challengeIdsTouched.includes(challenge.id))
+        .map((challenge) => ({
+          challengeId: challenge.id,
+          category: challenge.category,
+          subskillId: challenge.subskillId,
+          promptText: challenge.template.promptText,
+          lastStudentAnswer: challenge.lastStudentAnswer,
+          misconceptionTags: challenge.misconceptionTags,
+          scheduleIndex: challenge.scheduleIndex,
+          status: challenge.status,
+        }));
 
-    return (
-        <>
-            <Script
-                id="tone-js"
-                src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"
-                strategy="lazyOnload"
-                onReady={() => {
-                    // @ts-ignore
-                    if (window.Tone) {
-                        // @ts-ignore
-                        const Tone = window.Tone;
-                        synth.current = new Tone.PolySynth(Tone.Synth).toDestination();
-                        toneReady.current = true;
-                    }
-                }}
-            />
-            <div id="app" className="w-full min-h-screen sm:min-h-0 sm:max-w-lg sm:mx-auto sm:my-8 bg-white sm:rounded-2xl sm:shadow-2xl overflow-hidden sm:border sm:border-slate-100 relative">
-                <div className={`bg-indigo-600 p-6 text-white transition-colors duration-500 relative overflow-hidden`} id="header-bg">
-                    <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white opacity-10 rounded-full blur-xl"></div>
-                    <div className="flex justify-between items-center mb-6 relative z-10 gap-3">
-                        <h1 className="text-xl font-bold tracking-tight truncate min-w-0">{category.charAt(0).toUpperCase() + category.slice(1)}</h1>
-                        <button
-                            onClick={toggleMusic}
-                            className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full bg-indigo-500/40 hover:bg-indigo-500/60 backdrop-blur-sm border border-indigo-400/30 transition-all active:scale-90 text-lg"
-                            title={musicPlaying ? 'Silenciar música' : 'Activar música'}
-                        >
-                            {musicPlaying ? '🎵' : '🔇'}
-                        </button>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3 relative z-10">
-                        <div className="text-center bg-indigo-700/50 backdrop-blur-md p-3 rounded-2xl border border-indigo-500/30">
-                            <p className="text-indigo-200 text-[9px] uppercase font-bold tracking-widest mb-1">ACIERTOS</p>
-                            <p id="score" className="text-2xl font-black tabular-nums">{correctCount} / {totalQuestions}</p>
-                        </div>
-                        <div className="text-center bg-indigo-700/50 backdrop-blur-md p-3 rounded-2xl border border-indigo-500/30">
-                            <p className="text-indigo-200 text-[9px] uppercase font-bold tracking-widest mb-1">MEJOR TIEMPO</p>
-                            <p id="best-time" className="text-2xl font-black tabular-nums">{bestTime ? `${bestTime.toFixed(1)}s` : '--:--'}</p>
-                        </div>
-                    </div>
-                </div>
+      startInsightsTransition(async () => {
+        try {
+          const result = await generateSessionInsightsAction({
+            category,
+            gradeLevel,
+            goal: selectedGoal,
+            dueCount: getChallengeCounts(updatedSave, category).due,
+            attempts: sessionAttempts,
+            challengeDrafts,
+          });
 
-                <div id="screen-container" className="p-6">
-                    {screen === 'game' && (
-                        <div id="game-screen">
-                            <div className="flex flex-col items-center mb-8">
-                                <div className="w-full bg-slate-100 h-2.5 rounded-full mb-3 overflow-hidden">
-                                    <div className={`h-full rounded-full transition-all duration-1000 ease-linear ${timeLeft <= 10 ? 'bg-rose-500' : 'bg-indigo-500'}`} style={{ width: `${timeBarPercent}%` }}></div>
-                                </div>
-                                <div className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-lg border border-slate-100">
-                                    <span className="text-lg">⏱</span>
-                                    <span className={`font-mono font-bold text-xl tabular-nums ${timeLeft <= 10 ? 'text-rose-500 animate-pulse' : 'text-slate-700'}`}>{timeLeft}</span>
-                                </div>
-                            </div>
+          const hydrated = updateSessionInsights({
+            sessionId: updatedSession.id,
+            diagnostic: result.diagnostic,
+            challengeUpdates: result.challengeUpdates.map((update) => ({
+              challengeId: update.challengeId,
+              variantFocus: update.variantFocus,
+              lastStrategyTip: update.lastStrategyTip,
+              nextReviewSession:
+                typeof update.dueInSessions === 'number'
+                  ? updatedSave.sessions.length + update.dueInSessions
+                  : undefined,
+            })),
+          });
 
-                            <div className="text-center mb-8 min-h-[140px] flex flex-col justify-center">
-                                <div
-                                    id="problem-text"
-                                    className={`text-6xl font-black text-slate-800 tracking-tight leading-none mb-2 transition-all animate-pop ${isShaking ? 'animate-shake' : ''}`}
-                                    dangerouslySetInnerHTML={{ __html: currentProblem.text }}
-                                ></div>
-                                <p id="progress-text" className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">PREGUNTA {questionIndex + 1} DE {totalQuestions}</p>
-                            </div>
+          if (hydrated) {
+            hydrateIntroState(hydrated);
+            setDiagnostic(result.diagnostic);
+          }
+        } catch {
+          // Keep deterministic diagnostic already shown in UI.
+        }
+      });
+    }
+  };
 
-                            <div id="choice-container" className={`grid gap-3 mb-6 ${category === 'divisibility' ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                                {options.map((opt, i) => {
-                                    const isBool = typeof opt === 'boolean';
-                                    return (
-                                        <button
-                                            key={i}
-                                            onClick={() => handleChoice(opt)}
-                                            className={`choice-btn w-full p-4 rounded-xl font-bold text-xl shadow-sm border-2 transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none ${isBool
-                                                ? opt
-                                                    ? "bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-100 hover:border-emerald-200 py-6 text-2xl"
-                                                    : "bg-rose-50 text-rose-600 border-rose-100 hover:bg-rose-100 hover:border-rose-200 py-6 text-2xl"
-                                                : "bg-white text-slate-600 border-slate-100 hover:border-indigo-500 hover:text-indigo-600 hover:shadow-md"
-                                                }`}
-                                            disabled={!!feedback}
-                                        >
-                                            {isBool ? (opt ? 'SÍ' : 'NO') : opt}
-                                        </button>
-                                    );
-                                })}
-                            </div>
+  useEffect(() => {
+    if (screen === 'game' && timeLeft <= 0) {
+      finalizeSession(false);
+    }
+  }, [screen, timeLeft]);
 
-                            {feedback && (
-                                <div className={`text-center h-6 font-bold text-sm tracking-wide transition-all opacity-100 transform-none ${feedback.correct ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                    {feedback.text}
-                                </div>
-                            )}
+  const goToNextQuestion = (nextIndex: number) => {
+    const nextItem = queueRef.current[nextIndex];
+    if (!nextItem) {
+      finalizeSession(true);
+      return;
+    }
+    setQuestionIndex(nextIndex);
+    setCurrentProblem(nextItem.problem);
+    setOptions(generateOptions(nextItem.problem.ans, nextItem.problem.type));
+    setFeedback(null);
+    setHintText(null);
+    setHintLevel(0);
+    questionStartedAt.current = Date.now();
+  };
 
-                            <button onClick={() => router.push('/')} className="mt-8 w-full text-slate-400 hover:text-slate-600 text-[10px] font-bold uppercase tracking-widest transition-colors py-2">
-                                Abandonar Sesión
-                            </button>
-                        </div>
-                    )}
+  const handleChoice = (userValue: string | number | boolean) => {
+    if (!category || !currentProblem || screen !== 'game') return;
 
-                    {screen === 'result' && (
-                        <div id="result-screen" className="text-center py-6">
-                            <div className="text-7xl mb-6 animate-bounce">
-                                {wasCompleted ? (correctCount >= 18 ? '🚀' : '👏') : '⏰'}
-                            </div>
-                            <h2 className="text-3xl font-black text-slate-800 mb-2 tracking-tight">
-                                {wasCompleted ? (correctCount >= 18 ? '¡Eres un Genio!' : '¡Bien Hecho!') : '¡Tiempo Agotado!'}
-                            </h2>
-                            <p className="text-slate-500 mb-10 leading-relaxed max-w-[280px] mx-auto text-sm">
-                                {wasCompleted ?
-                                    (correctCount >= 18 ? '¡Impresionante velocidad y precisión! Has dominado los números difíciles.' : 'Has completado la prueba. Intenta mejorar tu precisión en la próxima ronda.') :
-                                    'Has sido rápido, pero el reloj ganó esta vez. ¡Vuelve a intentarlo!'
-                                }
-                            </p>
-                            <div className="grid grid-cols-2 gap-4 mb-8">
-                                <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100">
-                                    <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">TIEMPO FINAL</p>
-                                    <p className="text-2xl font-black text-indigo-600 tabular-nums">{finalTime.toFixed(1)}s</p>
-                                </div>
-                                <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100">
-                                    <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">ACIERTOS</p>
-                                    <p className="text-2xl font-black text-indigo-600 tabular-nums">{correctCount} / {totalQuestions}</p>
-                                </div>
-                            </div>
-                            <button onClick={() => router.push('/')} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all active:scale-95">
-                                Volver al Menú
-                            </button>
-                        </div>
-                    )}
-                </div>
+    const currentQueueItem = queueRef.current[questionIndex];
+    const isCorrect = userValue === currentProblem.ans;
+    const timeSpentMs = Date.now() - questionStartedAt.current;
+    const attempt: AttemptRecord = {
+      id: crypto.randomUUID(),
+      sessionId: sessionIdRef.current,
+      category,
+      gradeLevel,
+      questionIndex,
+      promptHtml: currentProblem.text,
+      promptText: currentProblem.plainText,
+      correctAnswer: answerToString(currentProblem.ans),
+      userAnswer: answerToString(userValue),
+      isCorrect,
+      answeredAt: new Date().toISOString(),
+      timeSpentMs,
+      attemptSource: currentQueueItem?.source ?? 'new',
+      hintUsage: hintLevel,
+      challengeId: currentQueueItem?.challengeId ?? null,
+      reviewKey: currentProblem.metadata.reviewKey,
+      subskillId: currentProblem.metadata.subskillId,
+      pattern: currentProblem.metadata.pattern,
+      difficulty: currentProblem.metadata.difficulty,
+      challengeSeed: currentProblem.metadata.challengeSeed,
+      misconceptionTags: inferMisconceptionTags(currentProblem, isCorrect, timeSpentMs),
+    };
+
+    attemptsRef.current = [...attemptsRef.current, attempt];
+
+    if (isCorrect) {
+      correctCountRef.current += 1;
+      setCorrectCount(correctCountRef.current);
+      if (toneReady.current && synth.current) {
+        synth.current.triggerAttackRelease(['C5', 'E5'], '16n');
+      }
+    } else {
+      setIsShaking(true);
+      setTimeout(() => setIsShaking(false), 300);
+      if (toneReady.current && synth.current) {
+        // @ts-ignore
+        const Tone = window.Tone;
+        const now = Tone.now();
+        synth.current.triggerAttackRelease(['E4', 'G4'], '16n', now);
+        synth.current.triggerAttackRelease(['C3', 'E3'], '8n', now + 0.12);
+      }
+    }
+
+    setFeedback({
+      text: isCorrect
+        ? currentQueueItem?.source === 'review'
+          ? '¡RETO SUPERADO!'
+          : '¡EXCELENTE!'
+        : 'LO REVISAREMOS OTRA VEZ',
+      correct: isCorrect,
+    });
+
+    setTimeout(() => {
+      const nextIndex = questionIndex + 1;
+      if (nextIndex >= TOTAL_QUESTIONS) {
+        finalizeSession(true);
+      } else {
+        goToNextQuestion(nextIndex);
+      }
+    }, 650);
+  };
+
+  const handleHint = () => {
+    if (!currentProblem) return;
+    const nextLevel = Math.min(3, hintLevel + 1) as HintUsage;
+    setHintLevel(nextLevel);
+    startHintTransition(async () => {
+      try {
+        const result = await generateHintAction({
+          problem: currentProblem.plainText,
+          hintLevel: nextLevel as 1 | 2 | 3,
+        });
+        setHintText(result.hint);
+      } catch {
+        setHintText(fallbackHintForProblem(currentProblem, nextLevel));
+      }
+    });
+  };
+
+  const handleReflection = (reflection: string) => {
+    setReflectionChoice(reflection);
+    if (!savedSessionId) return;
+    const updatedSave = updateSessionReflection(savedSessionId, reflection);
+    if (updatedSave) {
+      hydrateIntroState(updatedSave);
+    }
+  };
+
+  if (!category) return null;
+
+  const currentSource = queue[questionIndex]?.source ?? 'new';
+  const currentChallengeCount = save ? getChallengeCounts(save, category).due : 0;
+  const timeBarPercent = (timeLeft / maxTime) * 100;
+
+  return (
+    <>
+      <Script
+        id="tone-js"
+        src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"
+        strategy="lazyOnload"
+        onReady={() => {
+          // @ts-ignore
+          if (window.Tone) {
+            // @ts-ignore
+            const Tone = window.Tone;
+            synth.current = new Tone.PolySynth(Tone.Synth).toDestination();
+            toneReady.current = true;
+          }
+        }}
+      />
+      <div className="w-full min-h-screen sm:min-h-0 sm:max-w-lg sm:mx-auto sm:my-8 bg-white sm:rounded-2xl sm:shadow-2xl overflow-hidden sm:border sm:border-slate-100 relative">
+        <div className="bg-indigo-600 p-6 text-white relative overflow-hidden">
+          <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white opacity-10 rounded-full blur-xl"></div>
+          <div className="flex justify-between items-center mb-6 relative z-10 gap-3">
+            <h1 className="text-xl font-bold tracking-tight truncate min-w-0">
+              {categoryLabels[category]}
+            </h1>
+            <button
+              onClick={toggleMusic}
+              className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full bg-indigo-500/40 hover:bg-indigo-500/60 backdrop-blur-sm border border-indigo-400/30 transition-all active:scale-90 text-lg"
+              title={musicPlaying ? 'Silenciar música' : 'Activar música'}
+            >
+              {musicPlaying ? '🎵' : '🔇'}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 relative z-10">
+            <div className="text-center bg-indigo-700/50 backdrop-blur-md p-3 rounded-2xl border border-indigo-500/30">
+              <p className="text-indigo-200 text-[9px] uppercase font-bold tracking-widest mb-1">
+                ACIERTOS
+              </p>
+              <p className="text-2xl font-black tabular-nums">
+                {correctCount} / {TOTAL_QUESTIONS}
+              </p>
             </div>
-        </>
-    );
+            <div className="text-center bg-indigo-700/50 backdrop-blur-md p-3 rounded-2xl border border-indigo-500/30">
+              <p className="text-indigo-200 text-[9px] uppercase font-bold tracking-widest mb-1">
+                MEJOR TIEMPO
+              </p>
+              <p className="text-2xl font-black tabular-nums">
+                {bestTime ? `${bestTime.toFixed(1)}s` : '--:--'}
+              </p>
+            </div>
+            <div className="text-center bg-indigo-700/50 backdrop-blur-md p-3 rounded-2xl border border-indigo-500/30">
+              <p className="text-indigo-200 text-[9px] uppercase font-bold tracking-widest mb-1">
+                RETOS DUE
+              </p>
+              <p className="text-2xl font-black tabular-nums">{currentChallengeCount}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6">
+          {screen === 'intro' && (
+            <div className="space-y-5">
+              <div className="text-center space-y-2">
+                <span className="text-4xl block">🎯</span>
+                <h2 className="text-2xl font-bold text-slate-800">Antes de empezar</h2>
+                <p className="text-sm text-slate-500">
+                  Elige una meta breve para esta sesión. Así el resumen final podrá decirte
+                  si realmente la cumpliste.
+                </p>
+              </div>
+
+              <div className="bg-slate-50 rounded-2xl border border-slate-100 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-widest text-slate-400">
+                    Panorama
+                  </span>
+                  <span className="text-xs font-bold text-indigo-600">
+                    {dueCount > 0 ? `${dueCount} reto(s) volverán` : 'Sesión nueva'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl bg-white border border-slate-100 p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">
+                      Preguntas de review
+                    </p>
+                    <p className="text-lg font-black text-slate-800">
+                      {Math.min(Math.max(1, Math.round(TOTAL_QUESTIONS * 0.3)), dueCount || 0)}
+                    </p>
+                  </div>
+                  <div className="rounded-xl bg-white border border-slate-100 p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">
+                      Tiempo total
+                    </p>
+                    <p className="text-lg font-black text-slate-800">
+                      {category === 'divisibility' && gradeLevel === 5 ? '105s' : `${TIME_LIMITS[category]}s`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                  <Target className="h-4 w-4 text-indigo-500" />
+                  Meta de esta sesión
+                </div>
+                {defaultGoalsByCategory[category].map((goal) => (
+                  <button
+                    key={goal}
+                    onClick={() => setSelectedGoal(goal)}
+                    className={`w-full rounded-2xl border-2 px-4 py-3 text-left text-sm font-medium transition-all ${
+                      selectedGoal === goal
+                        ? 'border-indigo-500 bg-indigo-50 text-indigo-700 shadow-sm'
+                        : 'border-slate-100 bg-white text-slate-600 hover:border-indigo-200 hover:bg-indigo-50/40'
+                    }`}
+                  >
+                    {goal}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={() => void startSession()}
+                className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all active:scale-95"
+              >
+                Empezar sesión
+              </button>
+
+              <button
+                onClick={() => router.push('/')}
+                className="w-full text-slate-400 hover:text-slate-600 text-[10px] font-bold uppercase tracking-widest transition-colors py-2"
+              >
+                Volver al menú
+              </button>
+            </div>
+          )}
+
+          {screen === 'game' && currentProblem && (
+            <div className="space-y-6">
+              <div className="space-y-3">
+                <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-1000 ease-linear ${
+                      timeLeft <= 10 ? 'bg-rose-500' : 'bg-indigo-500'
+                    }`}
+                    style={{ width: `${timeBarPercent}%` }}
+                  ></div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-lg border border-slate-100">
+                    <span className="text-lg">⏱</span>
+                    <span
+                      className={`font-mono font-bold text-xl tabular-nums ${
+                        timeLeft <= 10 ? 'text-rose-500 animate-pulse' : 'text-slate-700'
+                      }`}
+                    >
+                      {timeLeft}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {currentSource === 'review' && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 text-amber-700 border border-amber-100 px-3 py-1 text-[10px] font-bold uppercase tracking-wider">
+                        <Repeat2 className="h-3.5 w-3.5" />
+                        Reto pendiente
+                      </span>
+                    )}
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-50 text-slate-500 border border-slate-100 px-3 py-1 text-[10px] font-bold uppercase tracking-wider">
+                      <Brain className="h-3.5 w-3.5" />
+                      {selectedGoal}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-center min-h-[160px] flex flex-col justify-center">
+                <div
+                  className={`${category === 'combined' ? 'text-4xl' : 'text-6xl'} font-black text-slate-800 tracking-tight leading-none mb-2 transition-all ${isShaking ? 'animate-shake' : 'animate-pop'}`}
+                  dangerouslySetInnerHTML={{ __html: currentProblem.text }}
+                ></div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
+                  PREGUNTA {questionIndex + 1} DE {TOTAL_QUESTIONS}
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <button
+                  onClick={handleHint}
+                  disabled={isGeneratingHint || hintLevel >= 3 || !!feedback}
+                  className="w-full rounded-2xl border-2 border-amber-100 bg-amber-50 text-amber-700 py-3 px-4 font-bold text-sm hover:bg-amber-100 transition-all disabled:opacity-60 disabled:pointer-events-none"
+                >
+                  <span className="inline-flex items-center gap-2">
+                    {isGeneratingHint ? (
+                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Lightbulb className="h-4 w-4" />
+                    )}
+                    {hintLevel === 0 ? 'Necesito una pista' : `Pista nivel ${Math.min(3, hintLevel + 1)}`}
+                  </span>
+                </button>
+
+                {hintText && (
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4 text-sm text-amber-900">
+                    <p className="text-[10px] uppercase tracking-wider font-bold text-amber-500 mb-1">
+                      Pista actual
+                    </p>
+                    <p>{hintText}</p>
+                  </div>
+                )}
+              </div>
+
+              <div
+                className={`grid gap-3 ${
+                  category === 'divisibility' || category === 'combined'
+                    ? 'grid-cols-2'
+                    : 'grid-cols-1'
+                }`}
+              >
+                {options.map((option, index) => {
+                  const isBool = typeof option === 'boolean';
+                  return (
+                    <button
+                      key={index}
+                      onClick={() => handleChoice(option)}
+                      disabled={!!feedback}
+                      className={`w-full p-4 rounded-xl font-bold text-xl shadow-sm border-2 transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none ${
+                        isBool
+                          ? option
+                            ? 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-100 hover:border-emerald-200 py-6 text-2xl'
+                            : 'bg-rose-50 text-rose-600 border-rose-100 hover:bg-rose-100 hover:border-rose-200 py-6 text-2xl'
+                          : 'bg-white text-slate-600 border-slate-100 hover:border-indigo-500 hover:text-indigo-600 hover:shadow-md'
+                      }`}
+                    >
+                      {isBool ? (option ? 'SÍ' : 'NO') : option}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {feedback && (
+                <div
+                  className={`text-center h-6 font-bold text-sm tracking-wide ${
+                    feedback.correct ? 'text-emerald-500' : 'text-rose-500'
+                  }`}
+                >
+                  {feedback.text}
+                </div>
+              )}
+
+              <button
+                onClick={() => router.push('/')}
+                className="w-full text-slate-400 hover:text-slate-600 text-[10px] font-bold uppercase tracking-widest transition-colors py-2"
+              >
+                Abandonar sesión
+              </button>
+            </div>
+          )}
+
+          {screen === 'result' && (
+            <div className="space-y-6">
+              <div className="text-center">
+                <div className="text-7xl mb-4">
+                  {wasCompleted ? (correctCountRef.current >= 18 ? '🚀' : '👏') : '⏰'}
+                </div>
+                <h2 className="text-3xl font-black text-slate-800 mb-2 tracking-tight">
+                  {wasCompleted
+                    ? correctCountRef.current >= 18
+                      ? '¡Sesión superada!'
+                      : '¡Buen trabajo!'
+                    : '¡Tiempo agotado!'}
+                </h2>
+                <p className="text-slate-500 text-sm max-w-[320px] mx-auto">
+                  Ahora no solo guardamos la puntuación: también registramos qué te costó,
+                  qué mejoró y qué reto volverá después.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100">
+                  <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">
+                    TIEMPO FINAL
+                  </p>
+                  <p className="text-2xl font-black text-indigo-600 tabular-nums">
+                    {finalTime.toFixed(1)}s
+                  </p>
+                </div>
+                <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100">
+                  <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">
+                    ACIERTOS
+                  </p>
+                  <p className="text-2xl font-black text-indigo-600 tabular-nums">
+                    {correctCountRef.current} / {TOTAL_QUESTIONS}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 text-center">
+                  <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">
+                    Review
+                  </p>
+                  <p className="text-lg font-black text-slate-700">{reviewQuestionCount}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 text-center">
+                  <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">
+                    Nuevos retos
+                  </p>
+                  <p className="text-lg font-black text-slate-700">{challengeCreatedCount}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 text-center">
+                  <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">
+                    Superados
+                  </p>
+                  <p className="text-lg font-black text-slate-700">{challengeMasteredCount}</p>
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-slate-100 bg-slate-50 p-5 space-y-4">
+                <div className="flex items-center gap-2 text-slate-700 font-bold">
+                  {isGeneratingInsights ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin text-indigo-500" />
+                  ) : (
+                    <Sparkles className="h-4 w-4 text-indigo-500" />
+                  )}
+                  Feedback final
+                </div>
+
+                {diagnostic && (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="rounded-2xl bg-white border border-emerald-100 p-4">
+                        <p className="text-[10px] uppercase tracking-wider text-emerald-500 font-bold mb-2">
+                          Lo que dominaste
+                        </p>
+                        <div className="space-y-2 text-sm text-slate-700">
+                          {diagnostic.mastered.map((item) => (
+                            <p key={item}>• {item}</p>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl bg-white border border-rose-100 p-4">
+                        <p className="text-[10px] uppercase tracking-wider text-rose-500 font-bold mb-2">
+                          Dónde costó
+                        </p>
+                        <div className="space-y-2 text-sm text-slate-700">
+                          {diagnostic.struggles.map((item) => (
+                            <p key={item}>• {item}</p>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3">
+                      <div className="rounded-2xl bg-white border border-slate-100 p-4">
+                        <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-1">
+                          Por qué pasó
+                        </p>
+                        <p className="text-sm text-slate-700">{diagnostic.whyItHappened}</p>
+                      </div>
+                      <div className="rounded-2xl bg-white border border-slate-100 p-4">
+                        <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-1">
+                          Estrategia para la próxima
+                        </p>
+                        <p className="text-sm text-slate-700">{diagnostic.strategy}</p>
+                      </div>
+                      <div className="rounded-2xl bg-white border border-slate-100 p-4">
+                        <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-1">
+                          Tu reto para la próxima vez
+                        </p>
+                        <p className="text-sm text-slate-700">{diagnostic.nextChallenge}</p>
+                      </div>
+                      <div className="rounded-2xl bg-white border border-slate-100 p-4">
+                        <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-1">
+                          Próxima misión
+                        </p>
+                        <p className="text-sm text-slate-700">{diagnostic.nextMission}</p>
+                      </div>
+                    </div>
+
+                    {diagnostic.attemptInsights.length > 0 && (
+                      <div className="space-y-3">
+                        <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">
+                          Errores importantes de esta sesión
+                        </p>
+                        {diagnostic.attemptInsights.map((insight) => (
+                          <div key={insight.attemptId} className="rounded-2xl bg-white border border-slate-100 p-4">
+                            <p className="font-bold text-slate-800">{insight.promptText}</p>
+                            <p className="text-sm text-slate-500 mt-1">
+                              Tu respuesta: <span className="font-semibold">{insight.userAnswer}</span>
+                            </p>
+                            <p className="text-sm text-slate-500">
+                              Respuesta correcta:{' '}
+                              <span className="font-semibold">{insight.correctAnswer}</span>
+                            </p>
+                            <p className="text-sm text-slate-700 mt-3">{insight.explanation}</p>
+                            {insight.microStrategyTip && (
+                              <p className="text-sm text-indigo-600 mt-2 font-medium">
+                                {insight.microStrategyTip}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="rounded-2xl bg-indigo-50 border border-indigo-100 p-4 text-sm text-indigo-700">
+                      {diagnostic.reviewPreview}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                  <Target className="h-4 w-4 text-indigo-500" />
+                  ¿Cómo te sentiste al terminar?
+                </div>
+                <div className="grid gap-2">
+                  {reflectionOptions.map((option) => (
+                    <button
+                      key={option}
+                      onClick={() => handleReflection(option)}
+                      className={`rounded-2xl border-2 px-4 py-3 text-left text-sm font-medium transition-all ${
+                        reflectionChoice === option
+                          ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                          : 'border-slate-100 bg-white text-slate-600 hover:border-indigo-200 hover:bg-indigo-50/40'
+                      }`}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  onClick={() => void startSession()}
+                  className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all active:scale-95"
+                >
+                  Jugar otra sesión
+                </button>
+                <button
+                  onClick={() => router.push('/')}
+                  className="w-full py-4 bg-slate-100 text-slate-700 rounded-2xl font-bold hover:bg-slate-200 transition-all active:scale-95"
+                >
+                  Volver al menú
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
 }

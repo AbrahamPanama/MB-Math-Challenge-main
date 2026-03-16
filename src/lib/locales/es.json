@@ -94,6 +94,10 @@
     "divisibility": {
       "name": "Reglas de Divisibilidad",
       "description": "Aprende las reglas para 2, 3, 5 y más."
+    },
+    "combined": {
+      "name": "Op. Combinadas",
+      "description": "Orden de jerarquía: (), [], {}."
     }
   }
 }

@@ -2,7 +2,13 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { getActiveSave, getCategoryAccuracy, getOverallAccuracy } from '@/lib/saveManager';
+import {
+    getActiveSave,
+    getCategoryAccuracy,
+    getChallengeCounts,
+    getLatestSession,
+    getOverallAccuracy,
+} from '@/lib/saveManager';
 import type { SaveSlot, Category } from '@/lib/types';
 
 const CATEGORY_LABELS: Record<Category, { name: string; emoji: string }> = {
@@ -10,6 +16,7 @@ const CATEGORY_LABELS: Record<Category, { name: string; emoji: string }> = {
     addition: { name: 'Sumas', emoji: '➕' },
     divisibility: { name: 'Divisibilidad', emoji: '➗' },
     fractions: { name: 'Fracciones', emoji: '🔢' },
+    combined: { name: 'Operaciones combinadas', emoji: '🧩' },
 };
 
 export default function StatsPage() {
@@ -31,6 +38,8 @@ export default function StatsPage() {
 
     const accuracy = getOverallAccuracy(save);
     const categories = Object.entries(save.stats) as [Category, typeof save.stats[Category]][];
+    const challengeCounts = getChallengeCounts(save);
+    const latestSession = getLatestSession(save);
 
     return (
         <div className="w-full min-h-screen sm:min-h-0 sm:max-w-lg sm:mx-auto sm:my-8 bg-white sm:rounded-2xl sm:shadow-2xl overflow-hidden sm:border sm:border-slate-100 relative">
@@ -69,11 +78,37 @@ export default function StatsPage() {
 
             {/* Per-category breakdown */}
             <div className="p-6 space-y-4">
+                <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-amber-50 rounded-2xl p-3 border border-amber-100 text-center">
+                        <p className="text-[9px] text-amber-500 font-bold uppercase tracking-wider">Retos activos</p>
+                        <p className="text-xl font-black text-amber-700">{challengeCounts.active + challengeCounts.review}</p>
+                    </div>
+                    <div className="bg-indigo-50 rounded-2xl p-3 border border-indigo-100 text-center">
+                        <p className="text-[9px] text-indigo-500 font-bold uppercase tracking-wider">Deben volver</p>
+                        <p className="text-xl font-black text-indigo-700">{challengeCounts.due}</p>
+                    </div>
+                    <div className="bg-emerald-50 rounded-2xl p-3 border border-emerald-100 text-center">
+                        <p className="text-[9px] text-emerald-500 font-bold uppercase tracking-wider">Superados</p>
+                        <p className="text-xl font-black text-emerald-700">{challengeCounts.mastered}</p>
+                    </div>
+                </div>
+
+                {latestSession && (
+                    <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Última misión</p>
+                        <p className="text-sm font-semibold text-slate-700">{latestSession.goal}</p>
+                        {latestSession.diagnostic.nextMission && (
+                            <p className="text-sm text-slate-500 mt-2">{latestSession.diagnostic.nextMission}</p>
+                        )}
+                    </div>
+                )}
+
                 <h2 className="text-sm font-bold text-slate-400 uppercase tracking-widest">Por Categoría</h2>
 
                 {categories.map(([cat, stats]) => {
                     const catAccuracy = getCategoryAccuracy(stats);
                     const label = CATEGORY_LABELS[cat];
+                    const catChallenges = getChallengeCounts(save, cat);
                     return (
                         <div key={cat} className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
                             <div className="flex items-center justify-between mb-3">
@@ -118,6 +153,20 @@ export default function StatsPage() {
                                             <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Aciertos</p>
                                             <p className="text-lg font-black text-indigo-600 tabular-nums">
                                                 {stats.totalCorrect}/{stats.totalQuestions}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2 mt-2">
+                                        <div className="bg-white rounded-xl p-2.5 text-center border border-slate-100">
+                                            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Retos Due</p>
+                                            <p className="text-lg font-black text-amber-600 tabular-nums">
+                                                {catChallenges.due}
+                                            </p>
+                                        </div>
+                                        <div className="bg-white rounded-xl p-2.5 text-center border border-slate-100">
+                                            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Superados</p>
+                                            <p className="text-lg font-black text-emerald-600 tabular-nums">
+                                                {catChallenges.mastered}
                                             </p>
                                         </div>
                                     </div>
