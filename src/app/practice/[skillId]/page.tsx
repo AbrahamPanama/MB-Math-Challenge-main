@@ -41,6 +41,7 @@ import type {
   SaveSlot,
   SessionDiagnostic,
 } from '@/lib/types';
+import { usePrefersReducedMotion } from '@/hooks/use-prefers-reduced-motion';
 
 type GameScreen = 'intro' | 'game' | 'result';
 
@@ -48,7 +49,7 @@ const TIME_LIMITS: Record<Category, number> = {
   multiplication: 120,
   addition: 120,
   divisibility: 90,
-  fractions: 120,
+  fractions: 150,
   combined: 180,
 };
 
@@ -88,6 +89,7 @@ export default function PracticeSessionPage() {
   const [isShaking, setIsShaking] = useState(false);
   const [isGeneratingHint, startHintTransition] = useTransition();
   const [isGeneratingInsights, startInsightsTransition] = useTransition();
+  const prefersReducedMotion = usePrefersReducedMotion();
 
   const timerInterval = useRef<NodeJS.Timeout | null>(null);
   const startTime = useRef(0);
@@ -105,6 +107,10 @@ export default function PracticeSessionPage() {
   const [musicMuted, setMusicMuted] = useState(() => {
     if (typeof window === 'undefined') return false;
     return localStorage.getItem('mm20-music-muted') === 'true';
+  });
+  const [calmMode, setCalmMode] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('mm20-calm') === 'true';
   });
 
   useEffect(() => {
@@ -246,6 +252,19 @@ export default function PracticeSessionPage() {
     }
   };
 
+  const toggleCalmMode = () => {
+    setCalmMode((value) => {
+      const next = !value;
+      localStorage.setItem('mm20-calm', String(next));
+      if (next) {
+        setMusicMuted(true);
+        localStorage.setItem('mm20-music-muted', 'true');
+        stopMusic();
+      }
+      return next;
+    });
+  };
+
   const hydrateIntroState = (updatedSave: SaveSlot) => {
     if (!category) return;
     setSave(updatedSave);
@@ -286,7 +305,7 @@ export default function PracticeSessionPage() {
 
     const firstProblem = sessionQueue[0]?.problem ?? null;
     setCurrentProblem(firstProblem);
-    setOptions(firstProblem ? generateOptions(firstProblem.ans, firstProblem.type) : []);
+    setOptions(firstProblem ? generateOptions(firstProblem.ans, firstProblem.type, firstProblem) : []);
 
     const nextMaxTime =
       category === 'divisibility' && refreshedSave.gradeLevel === 5
@@ -303,7 +322,7 @@ export default function PracticeSessionPage() {
       setTimeLeft((previous) => previous - 1);
     }, 1000);
 
-    if (toneReady.current && !musicMuted) {
+    if (toneReady.current && !musicMuted && !calmMode) {
       void startMusic();
     }
   };
@@ -427,7 +446,7 @@ export default function PracticeSessionPage() {
     }
     setQuestionIndex(nextIndex);
     setCurrentProblem(nextItem.problem);
-    setOptions(generateOptions(nextItem.problem.ans, nextItem.problem.type));
+    setOptions(generateOptions(nextItem.problem.ans, nextItem.problem.type, nextItem.problem));
     setFeedback(null);
     setHintText(null);
     setHintLevel(0);
@@ -465,17 +484,20 @@ export default function PracticeSessionPage() {
     };
 
     attemptsRef.current = [...attemptsRef.current, attempt];
+    const motionCalm = calmMode || prefersReducedMotion;
 
     if (isCorrect) {
       correctCountRef.current += 1;
       setCorrectCount(correctCountRef.current);
-      if (toneReady.current && synth.current) {
+      if (toneReady.current && synth.current && !calmMode) {
         synth.current.triggerAttackRelease(['C5', 'E5'], '16n');
       }
     } else {
-      setIsShaking(true);
-      setTimeout(() => setIsShaking(false), 300);
-      if (toneReady.current && synth.current) {
+      if (!motionCalm) {
+        setIsShaking(true);
+        setTimeout(() => setIsShaking(false), 300);
+      }
+      if (toneReady.current && synth.current && !calmMode) {
         // @ts-ignore
         const Tone = window.Tone;
         const now = Tone.now();
@@ -507,6 +529,10 @@ export default function PracticeSessionPage() {
     if (!currentProblem) return;
     const nextLevel = Math.min(3, hintLevel + 1) as HintUsage;
     setHintLevel(nextLevel);
+    if (category === 'fractions') {
+      setHintText(fallbackHintForProblem(currentProblem, nextLevel));
+      return;
+    }
     startHintTransition(async () => {
       try {
         const result = await generateHintAction({
@@ -534,6 +560,7 @@ export default function PracticeSessionPage() {
   const currentSource = queue[questionIndex]?.source ?? 'new';
   const currentChallengeCount = save ? getChallengeCounts(save, category).due : 0;
   const timeBarPercent = (timeLeft / maxTime) * 100;
+  const motionCalm = calmMode || prefersReducedMotion;
 
   return (
     <>
@@ -634,6 +661,51 @@ export default function PracticeSessionPage() {
                 </div>
               </div>
 
+              {category === 'fractions' && (
+                <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-widest text-indigo-400">
+                        Modo de practica
+                      </p>
+                      <p className="mt-1 text-sm font-bold text-slate-600">
+                        Paso a paso no tiene reloj y muestra una decision pequena por vez.
+                      </p>
+                    </div>
+                    <button
+                      onClick={toggleCalmMode}
+                      className={`rounded-2xl border-2 px-3 py-2 text-xs font-black uppercase tracking-widest transition-all ${
+                        calmMode
+                          ? 'border-indigo-500 bg-white text-indigo-700'
+                          : 'border-indigo-100 bg-indigo-100/60 text-slate-500'
+                      }`}
+                    >
+                      {calmMode ? 'Calma on' : 'Calma off'}
+                    </button>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <button
+                      onClick={() => router.push('/practice-guided/fractions')}
+                      className="rounded-2xl bg-white px-4 py-3 text-left text-sm font-black text-indigo-700 shadow-sm transition-all hover:bg-indigo-100 active:scale-95"
+                    >
+                      Paso a paso
+                      <span className="mt-1 block text-xs font-bold text-slate-500">
+                        Sin tiempo, con memoria visual.
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => void startSession()}
+                      className="rounded-2xl bg-indigo-600 px-4 py-3 text-left text-sm font-black text-white shadow-sm transition-all hover:bg-indigo-700 active:scale-95"
+                    >
+                      Rapido
+                      <span className="mt-1 block text-xs font-bold text-indigo-100">
+                        20 preguntas con reloj.
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
                   <Target className="h-4 w-4 text-indigo-500" />
@@ -658,7 +730,7 @@ export default function PracticeSessionPage() {
                 onClick={() => void startSession()}
                 className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all active:scale-95"
               >
-                Empezar sesión
+                {category === 'fractions' ? 'Empezar sesión rápida' : 'Empezar sesión'}
               </button>
 
               <button
@@ -676,7 +748,7 @@ export default function PracticeSessionPage() {
                 <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all duration-1000 ease-linear ${
-                      timeLeft <= 10 ? 'bg-rose-500' : 'bg-indigo-500'
+                      motionCalm ? 'bg-slate-300' : timeLeft <= 10 ? 'bg-rose-500' : 'bg-indigo-500'
                     }`}
                     style={{ width: `${timeBarPercent}%` }}
                   ></div>
@@ -686,7 +758,7 @@ export default function PracticeSessionPage() {
                     <span className="text-lg">⏱</span>
                     <span
                       className={`font-mono font-bold text-xl tabular-nums ${
-                        timeLeft <= 10 ? 'text-rose-500 animate-pulse' : 'text-slate-700'
+                        !motionCalm && timeLeft <= 10 ? 'text-rose-500 animate-pulse' : 'text-slate-700'
                       }`}
                     >
                       {timeLeft}
@@ -709,7 +781,7 @@ export default function PracticeSessionPage() {
 
               <div className="text-center min-h-[160px] flex flex-col justify-center">
                 <div
-                  className={`${category === 'combined' ? 'text-4xl' : 'text-6xl'} font-black text-slate-800 tracking-tight leading-none mb-2 transition-all ${isShaking ? 'animate-shake' : 'animate-pop'}`}
+                  className={`${category === 'combined' ? 'text-4xl' : 'text-6xl'} font-black text-slate-800 tracking-tight leading-none mb-2 transition-all ${motionCalm ? '' : isShaking ? 'animate-shake' : 'animate-pop'}`}
                   dangerouslySetInnerHTML={{ __html: currentProblem.text }}
                 ></div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">

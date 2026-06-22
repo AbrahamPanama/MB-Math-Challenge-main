@@ -1,9 +1,23 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowLeft, BookOpen, Circle } from 'lucide-react';
+import { ArrowLeft, BookOpen, Calculator, Circle, Equal } from 'lucide-react';
 
 const topics = [
+  {
+    href: '/teoria/operaciones-fracciones',
+    title: 'Operaciones con fracciones',
+    description: 'Suma, resta, multiplica y divide fracciones con modelos visuales paso a paso.',
+    icon: Calculator,
+    color: 'bg-emerald-600',
+  },
+  {
+    href: '/teoria/fracciones',
+    title: 'Fracciones mixtas y equivalentes',
+    description: 'Visualiza enteros, partes sombreadas y fracciones equivalentes con barras interactivas.',
+    icon: Equal,
+    color: 'bg-indigo-600',
+  },
   {
     href: '/teoria/pi-area',
     title: 'Área del Círculo: πr²',

@@ -268,6 +268,12 @@ const fallbackVariantFocus = (attempt: AttemptRecord): string => {
       return 'Volverá con una comparación similar para estimar qué fracción es mayor.';
     case 'fraction_operation':
       return 'Volverá con fracciones del mismo tipo para repetir el procedimiento.';
+    case 'fraction_common_denominator':
+      return 'Volverá con otra suma o resta para practicar denominador común.';
+    case 'fraction_multiplication':
+      return 'Volverá con otra multiplicación para practicar multiplicar y simplificar.';
+    case 'fraction_division':
+      return 'Volverá con otra división para practicar invertir y multiplicar.';
     case 'operation_order':
       return 'Volverá con otra expresión parecida para repetir el orden de operaciones.';
     case 'time_pressure':

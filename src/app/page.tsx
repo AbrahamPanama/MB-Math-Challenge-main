@@ -80,7 +80,7 @@ export default function Home() {
   const addFocus: Record<GradeLevel, string> = { 3: 'Enfoque: Sumas de 1 dígito', 4: 'Enfoque: 1 y 2 dígitos', 5: 'Enfoque: Sumas de 2 dígitos', 6: 'Enfoque: Llevadas difíciles' };
   const divTime: Record<GradeLevel, string> = { 3: '1:30 MIN', 4: '1:30 MIN', 5: '1:45 MIN', 6: '1:30 MIN' };
   const divFocus: Record<GradeLevel, string> = { 3: '', 4: 'Enfoque: Reglas del 2, 5, 10', 5: 'Enfoque: Reglas del 2, 3, 5, 9', 6: 'Enfoque: Reglas del 3 y 9' };
-  const fracFocus: Record<GradeLevel, string> = { 3: '', 4: '', 5: 'Enfoque: Simplificar, equivalentes', 6: 'Enfoque: Simplificar, comparar, operar' };
+  const fracFocus: Record<GradeLevel, string> = { 3: '', 4: '', 5: 'Enfoque: Sumar, restar y multiplicar', 6: 'Enfoque: +, −, × y ÷ con mixtos' };
   const combFocus: Record<GradeLevel, string> = { 3: '', 4: 'Enfoque: ( )', 5: 'Enfoque: ( ), [ ]', 6: 'Enfoque: ( ), [ ], { }' };
 
   return (
@@ -128,7 +128,7 @@ export default function Home() {
           <CategoryButton href="/practice/multiplication" title="Multiplicación" time="2:00 MIN" focus={multFocus[grade]} bestTime={getBestTime('multiplication')} pendingChallenges={getPendingChallenges('multiplication')} />
           <CategoryButton href="/practice/addition" title="Sumas" time="2:00 MIN" focus={addFocus[grade]} bestTime={getBestTime('addition')} pendingChallenges={getPendingChallenges('addition')} />
           {has('divisibility') && <CategoryButton href="/practice/divisibility" title="Divisibilidad" time={divTime[grade]} focus={divFocus[grade]} bestTime={getBestTime('divisibility')} pendingChallenges={getPendingChallenges('divisibility')} />}
-          {has('fractions') && <CategoryButton href="/practice/fractions" title="Fracciones" time="2:00 MIN" focus={fracFocus[grade]} bestTime={getBestTime('fractions')} pendingChallenges={getPendingChallenges('fractions')} />}
+          {has('fractions') && <CategoryButton href="/practice/fractions" title="Fracciones" time="2:30 MIN" focus={fracFocus[grade]} bestTime={getBestTime('fractions')} pendingChallenges={getPendingChallenges('fractions')} />}
 
           {/* Stats, Teoría & Switch Player */}
           <div className="pt-4 flex flex-col gap-3">

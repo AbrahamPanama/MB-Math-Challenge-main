@@ -11,6 +11,7 @@ import type {
   ProblemMetadata,
   SessionDiagnostic,
 } from './types';
+import { buildFractionSolution } from './fraction-solution';
 
 export const TOTAL_QUESTIONS = 20;
 export const REVIEW_INTERVALS = [1, 3, 7] as const;
@@ -34,12 +35,42 @@ type ProblemFactory = {
   misconceptionHints: MisconceptionTag[];
 };
 
+type FractionAnswerFormat = {
+  ans: number | string;
+  type: 'fraction-str' | 'mixed-fraction-str' | 'standard';
+};
+
+type FractionOperationPattern =
+  | 'add-same-denom'
+  | 'add-diff-denom'
+  | 'sub-same-denom'
+  | 'sub-diff-denom'
+  | 'mixed-add'
+  | 'mixed-sub'
+  | 'mult-fractions'
+  | 'mult-natural'
+  | 'mult-mixed'
+  | 'div-fractions'
+  | 'div-mixed';
+
 const HARD_NUMBERS = [6, 7, 8, 9, 12];
 
-const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+const gcd = (a: number, b: number): number => {
+  const left = Number.isFinite(a) ? Math.abs(a) : 0;
+  const right = Number.isFinite(b) ? Math.abs(b) : 0;
+  return right === 0 ? left : gcd(right, left % right);
+};
+const lcm = (a: number, b: number): number => {
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a === 0 || b === 0) return 1;
+  return Math.abs((a * b) / (gcd(a, b) || 1));
+};
 const renderFrac = (n: number | string, d: number | string): string =>
   `<div style="display:inline-flex;flex-direction:column;align-items:center;line-height:1;gap:2px;vertical-align:middle;"><span>${n}</span><div style="width:100%;height:3px;background:#1e293b;border-radius:2px;"></div><span>${d}</span></div>`;
 const renderFracInline = (n: number, d: number): string => `${n}/${d}`;
+const renderMixedInline = (whole: number, n: number, d: number): string =>
+  `${whole} ${n}/${d}`;
+const renderMixedHtml = (whole: number, n: number, d: number): string =>
+  fracRow(`<span style="font-weight:900;">${whole}</span>`, renderFrac(n, d));
 const fracRow = (...parts: string[]): string =>
   `<div style="display:flex;align-items:center;justify-content:center;gap:0.15em;">${parts.join('')}</div>`;
 const clamp = (value: number, min: number, max: number): number =>
@@ -54,6 +85,334 @@ const buildPositiveDifference = (
   const smaller = rand(min, Math.max(min, max - maxGap));
   const greater = rand(smaller + 1, Math.min(max, smaller + maxGap));
   return { greater, smaller };
+};
+
+const formatFractionAnswer = (n: number, d: number): FractionAnswerFormat => {
+  if (d === 0) return { ans: 0, type: 'standard' };
+  const sign = d < 0 ? -1 : 1;
+  const normalizedN = n * sign;
+  const normalizedD = Math.abs(d);
+  const divisor = gcd(normalizedN, normalizedD) || 1;
+  const reducedN = normalizedN / divisor;
+  const reducedD = normalizedD / divisor;
+  return reducedD === 1
+    ? { ans: reducedN, type: 'standard' }
+    : { ans: renderFracInline(reducedN, reducedD), type: 'fraction-str' };
+};
+
+const formatMixedAnswer = (whole: number, n: number, d: number): FractionAnswerFormat => {
+  if (d === 0) return { ans: 0, type: 'standard' };
+  const totalN = whole * d + n;
+  const normalized = formatFractionAnswer(totalN, d);
+  if (typeof normalized.ans === 'number') return normalized;
+
+  const sign = totalN < 0 ? -1 : 1;
+  const absN = Math.abs(totalN);
+  const nextWhole = Math.floor(absN / d) * sign;
+  const remainder = absN % d;
+  if (remainder === 0) return { ans: nextWhole, type: 'standard' };
+  if (nextWhole === 0) return normalized;
+
+  const divisor = gcd(remainder, d) || 1;
+  return {
+    ans: renderMixedInline(nextWhole, remainder / divisor, d / divisor),
+    type: 'mixed-fraction-str',
+  };
+};
+
+const renderFractionStrip = (
+  numerator: number,
+  denominator: number,
+  label?: string
+): string => {
+  const filled = clamp(numerator, 0, denominator);
+  const cells = Array.from({ length: denominator })
+    .map((_, index) => {
+      const isFilled = index < filled;
+      return `<span style="flex:1;height:18px;background:${isFilled ? '#818cf8' : '#eef2ff'};border-right:${index === denominator - 1 ? '0' : '1px solid #c7d2fe'};"></span>`;
+    })
+    .join('');
+
+  return `<div style="display:inline-flex;flex-direction:column;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#64748b;">
+    <div style="display:flex;width:150px;overflow:hidden;border:2px solid #6366f1;border-radius:999px;background:#eef2ff;">${cells}</div>
+    ${label ? `<span style="font-size:11px;line-height:1;color:#64748b;">${label}</span>` : ''}
+  </div>`;
+};
+
+const renderMixedVisual = (whole: number, n: number, d: number): string => {
+  const wholeBars = Array.from({ length: whole })
+    .map(() => renderFractionStrip(d, d))
+    .join('');
+  return `<div style="display:inline-flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:0.15em;">
+    <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:6px;max-width:330px;">${wholeBars}${renderFractionStrip(n, d)}</div>
+    <span style="font-size:13px;font-weight:900;color:#64748b;letter-spacing:0.08em;text-transform:uppercase;">${renderMixedInline(whole, n, d)}</span>
+  </div>`;
+};
+
+const renderEquivalentVisual = (
+  n: number,
+  d: number,
+  targetN: number,
+  targetD: number
+): string =>
+  `<div style="display:inline-flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:0.15em;">
+    ${renderFractionStrip(n, d, `${n}/${d}`)}
+    ${renderFractionStrip(targetN, targetD, `?/${targetD}`)}
+  </div>`;
+
+const FRACTION_OPERATION_PATTERNS: FractionOperationPattern[] = [
+  'add-same-denom',
+  'add-diff-denom',
+  'sub-same-denom',
+  'sub-diff-denom',
+  'mixed-add',
+  'mixed-sub',
+  'mult-fractions',
+  'mult-natural',
+  'mult-mixed',
+  'div-fractions',
+  'div-mixed',
+];
+
+const isFractionOperationPattern = (value: string): value is FractionOperationPattern =>
+  FRACTION_OPERATION_PATTERNS.includes(value as FractionOperationPattern);
+
+const compatibleDenoms = [2, 3, 4, 6, 8, 12];
+
+const pickCompatibleDenomPair = (): { d1: number; d2: number } => {
+  const pairs = compatibleDenoms.flatMap((d1) =>
+    compatibleDenoms
+      .filter((d2) => d2 !== d1 && lcm(d1, d2) <= 24)
+      .map((d2) => ({ d1, d2 }))
+  );
+  return pairs[rand(0, pairs.length - 1)] ?? { d1: 3, d2: 4 };
+};
+
+const renderFractionOperationPrompt = (
+  title: string,
+  left: string,
+  operator: string,
+  right: string
+): string =>
+  `<div style="font-size:0.42em;color:#94a3b8;text-align:center;margin-bottom:0.45em;">${title}</div>` +
+  fracRow(
+    left,
+    `<span style="font-size:0.6em;color:#6366f1;margin:0 0.15em;">${operator}</span>`,
+    right
+  );
+
+const operationSubskillIds: Record<FractionOperationPattern, string> = {
+  'add-same-denom': 'fractions-add-same-denominator',
+  'add-diff-denom': 'fractions-add-different-denominator',
+  'sub-same-denom': 'fractions-subtract-same-denominator',
+  'sub-diff-denom': 'fractions-subtract-different-denominator',
+  'mixed-add': 'fractions-mixed-addition',
+  'mixed-sub': 'fractions-mixed-subtraction',
+  'mult-fractions': 'fractions-multiply-fractions',
+  'mult-natural': 'fractions-multiply-natural',
+  'mult-mixed': 'fractions-multiply-mixed',
+  'div-fractions': 'fractions-divide-fractions',
+  'div-mixed': 'fractions-divide-mixed',
+};
+
+const operationMisconceptionHints: Record<FractionOperationPattern, MisconceptionTag[]> = {
+  'add-same-denom': ['fraction_operation'],
+  'add-diff-denom': ['fraction_common_denominator'],
+  'sub-same-denom': ['fraction_operation'],
+  'sub-diff-denom': ['fraction_common_denominator'],
+  'mixed-add': ['fraction_common_denominator'],
+  'mixed-sub': ['fraction_common_denominator'],
+  'mult-fractions': ['fraction_multiplication'],
+  'mult-natural': ['fraction_multiplication'],
+  'mult-mixed': ['fraction_multiplication'],
+  'div-fractions': ['fraction_division'],
+  'div-mixed': ['fraction_division'],
+};
+
+const operationTitles: Record<FractionOperationPattern, string> = {
+  'add-same-denom': 'Suma con el mismo denominador',
+  'add-diff-denom': 'Primero iguala denominadores',
+  'sub-same-denom': 'Resta con el mismo denominador',
+  'sub-diff-denom': 'Primero iguala denominadores',
+  'mixed-add': 'Suma números mixtos',
+  'mixed-sub': 'Resta números mixtos',
+  'mult-fractions': 'Multiplica numerador por numerador',
+  'mult-natural': 'Multiplica el entero por la fracción',
+  'mult-mixed': 'Convierte y multiplica',
+  'div-fractions': 'Divide invirtiendo la segunda fracción',
+  'div-mixed': 'Convierte, invierte y multiplica',
+};
+
+const buildFractionOperationProblemFromSeed = ({
+  pattern,
+  seed,
+  difficulty,
+  subskillId,
+  misconceptionHints,
+}: {
+  pattern: FractionOperationPattern;
+  seed: Record<string, string | number | boolean>;
+  difficulty: 'easy' | 'medium' | 'hard';
+  subskillId?: string;
+  misconceptionHints?: MisconceptionTag[];
+}): Problem => {
+  const readNumber = (value: string | number | boolean | undefined, fallback: number) => {
+    const next = Number(value);
+    return Number.isFinite(next) ? next : fallback;
+  };
+  const readDenominator = (value: string | number | boolean | undefined, fallback: number) => {
+    const next = Math.trunc(readNumber(value, fallback));
+    return next > 1 ? next : fallback;
+  };
+  const n1 = readNumber(seed.n1, 1);
+  const d1 = readDenominator(seed.d1, 2);
+  const n2 = readNumber(seed.n2, 1);
+  const d2 = readDenominator(seed.d2, d1);
+  const whole1 = readNumber(seed.whole1, 1);
+  const whole2 = readNumber(seed.whole2, 1);
+  const natural = readNumber(seed.natural, 2);
+  const commonD = lcm(d1, d2);
+  let answer: FractionAnswerFormat;
+  let left = renderFrac(n1, d1);
+  let right = renderFrac(n2, d2);
+  let operator = '+';
+  let plainText = `${n1}/${d1} + ${n2}/${d2}`;
+
+  if (pattern === 'add-same-denom' || pattern === 'add-diff-denom') {
+    answer = formatFractionAnswer(n1 * (commonD / d1) + n2 * (commonD / d2), commonD);
+  } else if (pattern === 'sub-same-denom' || pattern === 'sub-diff-denom') {
+    operator = '−';
+    plainText = `${n1}/${d1} - ${n2}/${d2}`;
+    answer = formatFractionAnswer(n1 * (commonD / d1) - n2 * (commonD / d2), commonD);
+  } else if (pattern === 'mixed-add') {
+    left = renderMixedHtml(whole1, n1, d1);
+    right = renderMixedHtml(whole2, n2, d2);
+    plainText = `${renderMixedInline(whole1, n1, d1)} + ${renderMixedInline(whole2, n2, d2)}`;
+    const totalN =
+      (whole1 * commonD + n1 * (commonD / d1)) +
+      (whole2 * commonD + n2 * (commonD / d2));
+    answer = formatMixedAnswer(0, totalN, commonD);
+  } else if (pattern === 'mixed-sub') {
+    left = renderMixedHtml(whole1, n1, d1);
+    right = renderMixedHtml(whole2, n2, d2);
+    operator = '−';
+    plainText = `${renderMixedInline(whole1, n1, d1)} - ${renderMixedInline(whole2, n2, d2)}`;
+    const totalN =
+      (whole1 * commonD + n1 * (commonD / d1)) -
+      (whole2 * commonD + n2 * (commonD / d2));
+    answer = formatMixedAnswer(0, totalN, commonD);
+  } else if (pattern === 'mult-natural') {
+    left = `<span style="font-weight:900;">${natural}</span>`;
+    right = renderFrac(n1, d1);
+    operator = '×';
+    plainText = `${natural} x ${n1}/${d1}`;
+    answer = formatFractionAnswer(natural * n1, d1);
+  } else if (pattern === 'mult-fractions') {
+    operator = '×';
+    plainText = `${n1}/${d1} x ${n2}/${d2}`;
+    answer = formatFractionAnswer(n1 * n2, d1 * d2);
+  } else if (pattern === 'mult-mixed') {
+    left = renderMixedHtml(whole1, n1, d1);
+    operator = '×';
+    plainText = `${renderMixedInline(whole1, n1, d1)} x ${n2}/${d2}`;
+    answer = formatMixedAnswer(0, (whole1 * d1 + n1) * n2, d1 * d2);
+  } else if (pattern === 'div-fractions') {
+    operator = '÷';
+    plainText = `${n1}/${d1} / ${n2}/${d2}`;
+    answer = formatFractionAnswer(n1 * d2, d1 * n2);
+  } else {
+    left = renderMixedHtml(whole1, n1, d1);
+    right = renderMixedHtml(whole2, n2, d2);
+    operator = '÷';
+    plainText = `${renderMixedInline(whole1, n1, d1)} / ${renderMixedInline(whole2, n2, d2)}`;
+    answer = formatFractionAnswer((whole1 * d1 + n1) * d2, d1 * (whole2 * d2 + n2));
+  }
+
+  return buildProblem({
+    text: renderFractionOperationPrompt(operationTitles[pattern], left, operator, right),
+    plainText,
+    ans: answer.ans,
+    type: answer.type,
+    subskillId: subskillId ?? operationSubskillIds[pattern],
+    label: 'Fracciones',
+    pattern,
+    difficulty,
+    challengeSeed: seed,
+    misconceptionHints: misconceptionHints ?? operationMisconceptionHints[pattern],
+  });
+};
+
+const buildFractionOperationSeed = (
+  pattern: FractionOperationPattern,
+  questionIndex: number
+): Record<string, string | number | boolean> => {
+  if (pattern === 'add-same-denom') {
+    const d1 = compatibleDenoms[rand(0, 4)];
+    return { n1: rand(1, d1 - 1), d1, n2: rand(1, d1 - 1), d2: d1 };
+  }
+
+  if (pattern === 'sub-same-denom') {
+    const d1 = compatibleDenoms[rand(2, compatibleDenoms.length - 1)];
+    const n2 = rand(1, d1 - 2);
+    return { n1: rand(n2 + 1, d1 - 1), d1, n2, d2: d1 };
+  }
+
+  if (pattern === 'add-diff-denom' || pattern === 'sub-diff-denom') {
+    for (let attempts = 0; attempts < 40; attempts += 1) {
+      const { d1, d2 } = pickCompatibleDenomPair();
+      const n1 = rand(1, d1 - 1);
+      const n2 = rand(1, d2 - 1);
+      if (pattern === 'add-diff-denom' || n1 / d1 > n2 / d2) {
+        return { n1, d1, n2, d2 };
+      }
+    }
+    return { n1: 3, d1: 4, n2: 1, d2: 6 };
+  }
+
+  if (pattern === 'mixed-add' || pattern === 'mixed-sub') {
+    const { d1, d2 } = pickCompatibleDenomPair();
+    const seed = {
+      whole1: rand(pattern === 'mixed-sub' ? 2 : 1, 4),
+      n1: rand(1, d1 - 1),
+      d1,
+      whole2: rand(1, 2),
+      n2: rand(1, d2 - 1),
+      d2,
+    };
+    if (pattern === 'mixed-sub') {
+      const commonD = lcm(d1, d2);
+      const left = Number(seed.whole1) * commonD + Number(seed.n1) * (commonD / d1);
+      const right = Number(seed.whole2) * commonD + Number(seed.n2) * (commonD / d2);
+      if (left <= right) {
+        seed.whole1 = Number(seed.whole2) + 1;
+      }
+    }
+    return seed;
+  }
+
+  if (pattern === 'mult-natural') {
+    const d1 = compatibleDenoms[rand(1, compatibleDenoms.length - 1)];
+    return { natural: rand(2, questionIndex < 10 ? 5 : 8), n1: rand(1, d1 - 1), d1 };
+  }
+
+  if (pattern === 'mult-fractions' || pattern === 'div-fractions') {
+    const { d1, d2 } = pickCompatibleDenomPair();
+    return { n1: rand(1, d1 - 1), d1, n2: rand(1, d2 - 1), d2 };
+  }
+
+  if (pattern === 'mult-mixed' || pattern === 'div-mixed') {
+    const { d1, d2 } = pickCompatibleDenomPair();
+    return {
+      whole1: rand(1, 3),
+      n1: rand(1, d1 - 1),
+      d1,
+      whole2: pattern === 'div-mixed' ? rand(1, 2) : 0,
+      n2: rand(1, d2 - 1),
+      d2,
+    };
+  }
+
+  return { n1: 1, d1: 2, n2: 1, d2: 3 };
 };
 
 const stringifySeed = (
@@ -154,7 +513,7 @@ export const defaultGoalsByCategory: Record<Category, string[]> = {
   ],
   fractions: [
     'Quiero fijarme en numerador y denominador.',
-    'Quiero simplificar con más seguridad.',
+    'Quiero cuidar el denominador común al sumar y restar.',
     'Quiero superar un reto pendiente.',
   ],
   combined: [
@@ -483,11 +842,14 @@ const buildFractionProblem = (
     const targetD = d * factor;
     const targetN = n * factor;
     return buildProblem({
-      text: fracRow(
-        renderFrac(n, d),
-        `<span style="font-size:0.6em;color:#94a3b8;">=</span>`,
-        renderFrac('?', targetD)
-      ),
+      text:
+        `<div style="font-size:0.42em;color:#94a3b8;text-align:center;margin-bottom:0.45em;">Cuenta las partes sombreadas equivalentes</div>` +
+        renderEquivalentVisual(n, d, targetN, targetD) +
+        fracRow(
+          renderFrac(n, d),
+          `<span style="font-size:0.6em;color:#94a3b8;">=</span>`,
+          renderFrac('?', targetD)
+        ),
       plainText: `${n}/${d} = ?/${targetD}`,
       ans: targetN,
       type: 'standard',
@@ -500,14 +862,77 @@ const buildFractionProblem = (
     });
   }
 
+  if (questionType === 'mixed-to-improper') {
+    const d = pickDenom();
+    const n = rand(1, d - 1);
+    const whole = rand(1, questionIndex < 10 ? 2 : 3);
+    const improperN = whole * d + n;
+    return buildProblem({
+      text:
+        `<div style="font-size:0.42em;color:#94a3b8;text-align:center;margin-bottom:0.45em;">Convierte a fracción impropia</div>` +
+        renderMixedVisual(whole, n, d) +
+        fracRow(
+          `<span style="font-weight:900;">${whole}</span>`,
+          renderFrac(n, d),
+          `<span style="font-size:0.6em;color:#94a3b8;">=</span>`,
+          renderFrac('?', d)
+        ),
+      plainText: `Convierte ${renderMixedInline(whole, n, d)} a fracción impropia`,
+      ans: renderFracInline(improperN, d),
+      type: 'fraction-str',
+      subskillId: 'fractions-mixed',
+      label: 'Fracciones',
+      pattern: 'mixed-to-improper',
+      difficulty,
+      challengeSeed: { whole, n, d, improperN },
+      misconceptionHints: ['fraction_operation'],
+    });
+  }
+
+  if (questionType === 'improper-to-mixed') {
+    const d = pickDenom();
+    const n = rand(1, d - 1);
+    const whole = rand(1, questionIndex < 10 ? 2 : 3);
+    const improperN = whole * d + n;
+    return buildProblem({
+      text:
+        `<div style="font-size:0.42em;color:#94a3b8;text-align:center;margin-bottom:0.45em;">Convierte a número mixto</div>` +
+        renderMixedVisual(whole, n, d) +
+        fracRow(
+          renderFrac(improperN, d),
+          `<span style="font-size:0.6em;color:#94a3b8;">=</span>`,
+          `<span style="font-size:0.55em;color:#94a3b8;">? ${renderFrac('?', d)}</span>`
+        ),
+      plainText: `Convierte ${improperN}/${d} a número mixto`,
+      ans: renderMixedInline(whole, n, d),
+      type: 'mixed-fraction-str',
+      subskillId: 'fractions-mixed',
+      label: 'Fracciones',
+      pattern: 'improper-to-mixed',
+      difficulty,
+      challengeSeed: { whole, n, d, improperN },
+      misconceptionHints: ['fraction_operation'],
+    });
+  }
+
   if (questionType === 'compare') {
     const d1 = pickDenom();
     const n1 = rand(1, d1 - 1);
-    let d2 = pickDenom();
-    while (d2 === d1) d2 = pickDenom();
-    let n2 = rand(1, d2 - 1);
-    while (n1 / d1 === n2 / d2) {
+    let d2 = d1;
+    let n2 = 1;
+    let foundComparison = false;
+    for (let attempts = 0; attempts < 40; attempts += 1) {
+      d2 = pickDenom();
+      if (d2 === d1) continue;
       n2 = rand(1, d2 - 1);
+      if (n1 * d2 !== n2 * d1) {
+        foundComparison = true;
+        break;
+      }
+    }
+    if (!foundComparison) {
+      d2 = denoms.find((candidate) => candidate !== d1 && candidate > 2) ?? 3;
+      n2 = n1 * d2 === d1 ? 2 : 1;
     }
     const val1 = n1 / d1;
     const val2 = n2 / d2;
@@ -532,32 +957,13 @@ const buildFractionProblem = (
     });
   }
 
-  const sameDenom = questionType === 'add-same-denom';
-  let d1 = pickDenom();
-  let d2 = sameDenom ? d1 : pickDenom();
-  while (!sameDenom && d2 === d1) d2 = pickDenom();
-  const n1 = rand(1, d1 - 1);
-  const n2 = rand(1, d2 - 1);
-  const commonD = sameDenom ? d1 : (d1 * d2) / gcd(d1, d2);
-  const sumN = n1 * (commonD / d1) + n2 * (commonD / d2);
-  const reduced = gcd(sumN, commonD);
-  const ansN = sumN / reduced;
-  const ansD = commonD / reduced;
-  return buildProblem({
-    text: fracRow(
-      renderFrac(n1, d1),
-      `<span style="font-size:0.6em;color:#6366f1;margin:0 0.15em;">+</span>`,
-      renderFrac(n2, d2)
-    ),
-    plainText: `${n1}/${d1} + ${n2}/${d2}`,
-    ans: renderFracInline(ansN, ansD),
-    type: 'fraction-str',
-    subskillId: sameDenom ? 'fractions-add-same-denominator' : 'fractions-add-different-denominator',
-    label: 'Fracciones',
-    pattern: sameDenom ? 'add-same-denom' : 'add-diff-denom',
+  const operationPattern = isFractionOperationPattern(questionType)
+    ? questionType
+    : 'add-same-denom';
+  return buildFractionOperationProblemFromSeed({
+    pattern: operationPattern,
+    seed: buildFractionOperationSeed(operationPattern, questionIndex),
     difficulty,
-    challengeSeed: { n1, d1, n2, d2, ansN, ansD },
-    misconceptionHints: ['fraction_operation'],
   });
 };
 
@@ -565,18 +971,66 @@ const makeFractionsProblem = (
   questionIndex: number,
   grade: GradeLevel
 ): Problem => {
-  const g5Types = ['frac-of-number', 'simplify', 'equivalent'];
-  const easyTypes = ['frac-of-number', 'simplify', 'equivalent'];
-  const medTypes = ['compare', 'add-same-denom', 'simplify', 'equivalent', 'frac-of-number'];
-  const hardTypes = ['add-diff-denom', 'add-same-denom', 'compare', 'frac-of-number', 'simplify'];
-  const questionType =
+  const grade5EasyTypes = [
+    'frac-of-number',
+    'simplify',
+    'equivalent',
+    'mixed-to-improper',
+    'add-same-denom',
+    'sub-same-denom',
+  ];
+  const grade5MedTypes = [
+    ...grade5EasyTypes,
+    'add-diff-denom',
+    'sub-diff-denom',
+    'mult-natural',
+    'mult-fractions',
+    'compare',
+  ];
+  const grade5HardTypes = [
+    ...grade5MedTypes,
+    'improper-to-mixed',
+    'div-fractions',
+  ];
+  const grade6EasyTypes = [
+    'frac-of-number',
+    'simplify',
+    'equivalent',
+    'mixed-to-improper',
+    'add-same-denom',
+    'sub-same-denom',
+    'mult-natural',
+  ];
+  const grade6MedTypes = [
+    ...grade6EasyTypes,
+    'add-diff-denom',
+    'sub-diff-denom',
+    'mult-fractions',
+    'mult-mixed',
+    'improper-to-mixed',
+    'compare',
+  ];
+  const grade6HardTypes = [
+    ...grade6MedTypes,
+    'mixed-add',
+    'mixed-sub',
+    'div-fractions',
+    'div-mixed',
+  ];
+  const pool =
     grade <= 5
-      ? g5Types[rand(0, g5Types.length - 1)]
-      : questionIndex < 7
-        ? easyTypes[rand(0, easyTypes.length - 1)]
+      ? questionIndex < 7
+        ? grade5EasyTypes
         : questionIndex < 14
-          ? medTypes[rand(0, medTypes.length - 1)]
-          : hardTypes[rand(0, hardTypes.length - 1)];
+          ? grade5MedTypes
+          : grade5HardTypes
+      : questionIndex < 7
+        ? grade6EasyTypes
+        : questionIndex < 14
+          ? grade6MedTypes
+          : grade6HardTypes;
+  const questionType =
+    pool[rand(0, pool.length - 1)];
   return buildFractionProblem(questionType, questionIndex, grade);
 };
 
@@ -1058,14 +1512,68 @@ const createProblemFromTemplate = (
       const targetD = Number(seed.targetD);
       const targetN = Number(seed.targetN);
       return buildProblem({
-        text: fracRow(
-          renderFrac(n, d),
-          `<span style="font-size:0.6em;color:#94a3b8;">=</span>`,
-          renderFrac('?', targetD)
-        ),
+        text:
+          `<div style="font-size:0.42em;color:#94a3b8;text-align:center;margin-bottom:0.45em;">Cuenta las partes sombreadas equivalentes</div>` +
+          renderEquivalentVisual(n, d, targetN, targetD) +
+          fracRow(
+            renderFrac(n, d),
+            `<span style="font-size:0.6em;color:#94a3b8;">=</span>`,
+            renderFrac('?', targetD)
+          ),
         plainText: `${n}/${d} = ?/${targetD}`,
         ans: targetN,
         type: 'standard',
+        subskillId: metadata.subskillId,
+        label: 'Fracciones',
+        pattern: metadata.pattern,
+        difficulty: metadata.difficulty,
+        challengeSeed: seed,
+        misconceptionHints: metadata.misconceptionHints,
+      });
+    }
+    if (metadata.pattern === 'mixed-to-improper') {
+      const whole = Number(seed.whole);
+      const n = Number(seed.n);
+      const d = Number(seed.d);
+      const improperN = Number(seed.improperN);
+      return buildProblem({
+        text:
+          `<div style="font-size:0.42em;color:#94a3b8;text-align:center;margin-bottom:0.45em;">Convierte a fracción impropia</div>` +
+          renderMixedVisual(whole, n, d) +
+          fracRow(
+            `<span style="font-weight:900;">${whole}</span>`,
+            renderFrac(n, d),
+            `<span style="font-size:0.6em;color:#94a3b8;">=</span>`,
+            renderFrac('?', d)
+          ),
+        plainText: `Convierte ${renderMixedInline(whole, n, d)} a fracción impropia`,
+        ans: renderFracInline(improperN, d),
+        type: 'fraction-str',
+        subskillId: metadata.subskillId,
+        label: 'Fracciones',
+        pattern: metadata.pattern,
+        difficulty: metadata.difficulty,
+        challengeSeed: seed,
+        misconceptionHints: metadata.misconceptionHints,
+      });
+    }
+    if (metadata.pattern === 'improper-to-mixed') {
+      const whole = Number(seed.whole);
+      const n = Number(seed.n);
+      const d = Number(seed.d);
+      const improperN = Number(seed.improperN);
+      return buildProblem({
+        text:
+          `<div style="font-size:0.42em;color:#94a3b8;text-align:center;margin-bottom:0.45em;">Convierte a número mixto</div>` +
+          renderMixedVisual(whole, n, d) +
+          fracRow(
+            renderFrac(improperN, d),
+            `<span style="font-size:0.6em;color:#94a3b8;">=</span>`,
+            `<span style="font-size:0.55em;color:#94a3b8;">? ${renderFrac('?', d)}</span>`
+          ),
+        plainText: `Convierte ${improperN}/${d} a número mixto`,
+        ans: renderMixedInline(whole, n, d),
+        type: 'mixed-fraction-str',
         subskillId: metadata.subskillId,
         label: 'Fracciones',
         pattern: metadata.pattern,
@@ -1100,27 +1608,12 @@ const createProblemFromTemplate = (
         misconceptionHints: metadata.misconceptionHints,
       });
     }
-    if (metadata.pattern === 'add-same-denom' || metadata.pattern === 'add-diff-denom') {
-      const n1 = Number(seed.n1);
-      const d1 = Number(seed.d1);
-      const n2 = Number(seed.n2);
-      const d2 = Number(seed.d2);
-      const ansN = Number(seed.ansN);
-      const ansD = Number(seed.ansD);
-      return buildProblem({
-        text: fracRow(
-          renderFrac(n1, d1),
-          `<span style="font-size:0.6em;color:#6366f1;margin:0 0.15em;">+</span>`,
-          renderFrac(n2, d2)
-        ),
-        plainText: `${n1}/${d1} + ${n2}/${d2}`,
-        ans: renderFracInline(ansN, ansD),
-        type: 'fraction-str',
-        subskillId: metadata.subskillId,
-        label: 'Fracciones',
+    if (isFractionOperationPattern(metadata.pattern)) {
+      return buildFractionOperationProblemFromSeed({
         pattern: metadata.pattern,
+        seed,
         difficulty: metadata.difficulty,
-        challengeSeed: seed,
+        subskillId: metadata.subskillId,
         misconceptionHints: metadata.misconceptionHints,
       });
     }
@@ -1134,6 +1627,199 @@ const createProblemFromTemplate = (
     pattern: metadata.pattern,
     misconceptionHints: metadata.misconceptionHints,
   });
+};
+
+const nudgeNumerator = (
+  value: number,
+  denominator: number,
+  sessionOrdinal: number
+): number => {
+  const delta = sessionOrdinal % 2 === 0 ? 1 : -1;
+  return clamp(value + delta, 1, Math.max(1, denominator - 1));
+};
+
+const findNumeratorNear = (
+  denominator: number,
+  preferred: number,
+  predicate: (candidate: number) => boolean
+): number | null => {
+  if (!Number.isFinite(denominator) || denominator <= 1) return null;
+  const candidates = Array.from(
+    { length: Math.max(0, Math.trunc(denominator) - 1) },
+    (_, index) => index + 1
+  ).sort(
+    (left, right) =>
+      Math.abs(left - preferred) - Math.abs(right - preferred) || left - right
+  );
+  return candidates.find(predicate) ?? null;
+};
+
+const isFractionGreater = (
+  n1: number,
+  d1: number,
+  n2: number,
+  d2: number
+): boolean => n1 * d2 > n2 * d1;
+
+const isSameFractionValue = (
+  n1: number,
+  d1: number,
+  n2: number,
+  d2: number
+): boolean => n1 * d2 === n2 * d1;
+
+const buildFractionVariantSeed = (
+  pattern: string,
+  seed: Record<string, string | number | boolean>,
+  sessionOrdinal: number
+): Record<string, string | number | boolean> | null => {
+  const delta = sessionOrdinal % 2 === 0 ? 1 : -1;
+  const next = { ...seed };
+
+  if (pattern === 'frac-of-number' || pattern === 'reverse-frac-of-number') {
+    const d = Number(seed.d);
+    const whole = Number(seed.whole);
+    if (!Number.isFinite(d) || !Number.isFinite(whole)) return null;
+    next.whole = Math.max(d * 2, whole + d * delta);
+    return next;
+  }
+
+  if (pattern === 'simplify' || pattern === 'reverse-simplify') {
+    const simplN = Number(seed.simplN);
+    const simplD = Number(seed.simplD);
+    const factor = Math.max(2, Math.round(Number(seed.shownD) / Math.max(1, simplD)) + delta);
+    if (!Number.isFinite(simplN) || !Number.isFinite(simplD)) return null;
+    next.shownN = simplN * factor;
+    next.shownD = simplD * factor;
+    return next;
+  }
+
+  if (pattern === 'equivalent') {
+    const n = Number(seed.n);
+    const d = Number(seed.d);
+    const currentFactor = Math.max(2, Math.round(Number(seed.targetD) / Math.max(1, d)));
+    const factor = clamp(currentFactor + delta, 2, 5);
+    if (!Number.isFinite(n) || !Number.isFinite(d)) return null;
+    next.targetD = d * factor;
+    next.targetN = n * factor;
+    return next;
+  }
+
+  if (pattern === 'compare') {
+    const d1 = Number(seed.d1);
+    const n1 = Number(seed.n1);
+    const d2 = Number(seed.d2);
+    const n2 = Number(seed.n2);
+    if (!Number.isFinite(d1) || !Number.isFinite(n1) || !Number.isFinite(d2) || !Number.isFinite(n2)) {
+      return null;
+    }
+    const preferredN1 = nudgeNumerator(n1, d1, sessionOrdinal);
+    const adjustedN1 = findNumeratorNear(
+      d1,
+      preferredN1,
+      (candidate) => candidate !== n1 && !isSameFractionValue(candidate, d1, n2, d2)
+    );
+    if (adjustedN1 !== null) {
+      next.n1 = adjustedN1;
+      return next;
+    }
+    const adjustedN2 = findNumeratorNear(
+      d2,
+      nudgeNumerator(n2, d2, sessionOrdinal + 1),
+      (candidate) => candidate !== n2 && !isSameFractionValue(n1, d1, candidate, d2)
+    );
+    if (adjustedN2 !== null) {
+      next.n2 = adjustedN2;
+      return next;
+    }
+    return null;
+  }
+
+  if (pattern === 'mixed-to-improper' || pattern === 'improper-to-mixed') {
+    const whole = Number(seed.whole);
+    const n = Number(seed.n);
+    const d = Number(seed.d);
+    if (!Number.isFinite(whole) || !Number.isFinite(n) || !Number.isFinite(d)) return null;
+    next.whole = clamp(whole + delta, 1, 4);
+    next.improperN = Number(next.whole) * d + n;
+    return next;
+  }
+
+  if (!isFractionOperationPattern(pattern)) return null;
+
+  if (pattern === 'mixed-add' || pattern === 'mixed-sub' || pattern === 'mult-mixed' || pattern === 'div-mixed') {
+    const whole1 = Number(seed.whole1);
+    if (!Number.isFinite(whole1)) return null;
+    next.whole1 = clamp(whole1 + delta, 1, 5);
+    if (pattern === 'mixed-sub') {
+      const d1 = Number(seed.d1);
+      const d2 = Number(seed.d2);
+      const n1 = Number(seed.n1);
+      const n2 = Number(seed.n2);
+      const whole2 = Number(seed.whole2);
+      if (
+        !Number.isFinite(d1) ||
+        !Number.isFinite(d2) ||
+        !Number.isFinite(n1) ||
+        !Number.isFinite(n2) ||
+        !Number.isFinite(whole2)
+      ) {
+        return null;
+      }
+      const commonD = lcm(d1, d2);
+      const left =
+        Number(next.whole1) * commonD +
+        n1 * (commonD / d1);
+      const right = whole2 * commonD + n2 * (commonD / d2);
+      if (left <= right) {
+        next.whole1 = clamp(whole2 + 1, 1, 6);
+        const repairedLeft =
+          Number(next.whole1) * commonD + n1 * (commonD / d1);
+        if (repairedLeft <= right) return null;
+      }
+    }
+    return next;
+  }
+
+  if (pattern === 'mult-natural') {
+    const natural = Number(seed.natural);
+    if (!Number.isFinite(natural)) return null;
+    next.natural = clamp(natural + delta, 2, 9);
+    return next;
+  }
+
+  const d1 = Number(seed.d1);
+  const d2 = Number(seed.d2 ?? d1);
+  const n1 = Number(seed.n1);
+  const n2 = Number(seed.n2);
+  if (!Number.isFinite(d1) || !Number.isFinite(d2) || !Number.isFinite(n1) || !Number.isFinite(n2)) {
+    return null;
+  }
+
+  if (pattern === 'sub-same-denom' || pattern === 'sub-diff-denom') {
+    const adjustedN1 = findNumeratorNear(
+      d1,
+      nudgeNumerator(n1, d1, sessionOrdinal),
+      (candidate) => candidate !== n1 && isFractionGreater(candidate, d1, n2, d2)
+    );
+    if (adjustedN1 !== null) {
+      next.n1 = adjustedN1;
+      return next;
+    }
+    const adjustedN2 = findNumeratorNear(
+      d2,
+      nudgeNumerator(n2, d2, sessionOrdinal + 1),
+      (candidate) => candidate !== n2 && isFractionGreater(n1, d1, candidate, d2)
+    );
+    if (adjustedN2 !== null) {
+      next.n2 = adjustedN2;
+      return next;
+    }
+    return null;
+  }
+
+  next.n1 = nudgeNumerator(n1, d1, sessionOrdinal);
+  return next;
 };
 
 const createVariantProblem = (
@@ -1185,6 +1871,15 @@ const createVariantProblem = (
     });
   }
 
+  if (challenge.category === 'fractions') {
+    const variantSeed = buildFractionVariantSeed(pattern, seed, sessionOrdinal);
+    if (!variantSeed) return null;
+    return createProblemFromTemplate(challenge.category, {
+      ...challenge.template.metadata,
+      challengeSeed: variantSeed,
+    });
+  }
+
   if (challenge.category === 'combined') {
     const tier = Number(seed.tier ?? 1);
     const template = String(seed.template ?? '');
@@ -1226,12 +1921,65 @@ export const createReviewProblem = (
   );
 };
 
+const buildClassicFractionDecoy = (problem?: Problem): ProblemAnswer | null => {
+  if (!problem || labelToCategory(problem.metadata.label) !== 'fractions') return null;
+  const { pattern, challengeSeed: seed } = problem.metadata;
+  const n1 = Number(seed.n1);
+  const d1 = Number(seed.d1);
+  const n2 = Number(seed.n2);
+  const d2 = Number(seed.d2);
+  const natural = Number(seed.natural);
+
+  if (!Number.isFinite(n1) || !Number.isFinite(d1)) return null;
+
+  if (pattern === 'add-diff-denom') {
+    return formatFractionAnswer(n1 + n2, d1 + d2).ans;
+  }
+
+  if (pattern === 'sub-diff-denom' && d1 !== d2 && n1 > n2) {
+    return formatFractionAnswer(n1 - n2, Math.abs(d1 - d2)).ans;
+  }
+
+  if (pattern === 'mult-fractions') {
+    return formatFractionAnswer(n1 + n2, d1 + d2).ans;
+  }
+
+  if (pattern === 'mult-natural' && Number.isFinite(natural)) {
+    return formatFractionAnswer(natural + n1, d1).ans;
+  }
+
+  if (pattern === 'div-fractions') {
+    return formatFractionAnswer(n1 * n2, d1 * d2).ans;
+  }
+
+  return null;
+};
+
 export const generateOptions = (
   correctAnswer: ProblemAnswer,
-  type: string
+  type: string,
+  problem?: Problem
 ): Array<string | number | boolean> => {
   if (typeof correctAnswer === 'boolean') return [true, false];
   const options: Array<string | number | boolean> = [correctAnswer];
+  const classicDecoy = buildClassicFractionDecoy(problem);
+  const addOption = (value: string | number | boolean | undefined) => {
+    if (
+      options.length < 5 &&
+      value !== undefined &&
+      value !== correctAnswer &&
+      !options.includes(value)
+    ) {
+      options.push(value);
+    }
+  };
+  if (
+    classicDecoy !== null &&
+    classicDecoy !== correctAnswer &&
+    !options.includes(classicDecoy)
+  ) {
+    options.push(classicDecoy);
+  }
   let attempts = 0;
 
   while (options.length < 5 && attempts < 60) {
@@ -1267,13 +2015,66 @@ export const generateOptions = (
       ];
       const maybe: string = variants[rand(0, variants.length - 1)];
       if (!options.includes(maybe) && maybe !== correctAnswer) decoy = maybe;
+    } else if (type === 'mixed-fraction-str') {
+      const match = /^(\d+)\s+(\d+)\/(\d+)$/.exec(String(correctAnswer));
+      if (match) {
+        const whole = Number(match[1]);
+        const n = Number(match[2]);
+        const d = Number(match[3]);
+        const variants: string[] = [
+          renderMixedInline(whole + 1, n, d),
+          renderMixedInline(Math.max(1, whole - 1), n, d),
+          renderMixedInline(whole, Math.min(d - 1, n + 1), d),
+          renderMixedInline(whole, Math.max(1, n - 1), d),
+          renderMixedInline(whole, n, d + 1),
+        ];
+        const maybe = variants[rand(0, variants.length - 1)];
+        if (!options.includes(maybe) && maybe !== correctAnswer) decoy = maybe;
+      }
     } else {
       const diff = rand(1, 5) * (Math.random() > 0.5 ? 1 : -1);
       const maybe: number = Number(correctAnswer) + diff;
       if (Number.isFinite(maybe) && maybe > 0 && maybe !== correctAnswer) decoy = maybe;
     }
 
-    if (decoy !== undefined && !options.includes(decoy)) options.push(decoy);
+    addOption(decoy);
+  }
+
+  if (options.length < 5 && type === 'fraction-str') {
+    const [n, d]: [number, number] = String(correctAnswer)
+      .split('/')
+      .map(Number) as [number, number];
+    [
+      `${n + 2}/${d}`,
+      `${Math.max(1, n - 2)}/${d}`,
+      `${n}/${d + 2}`,
+      `${n + d}/${d}`,
+      `${Math.max(1, d - n)}/${d}`,
+    ].forEach(addOption);
+  }
+
+  if (options.length < 5 && type === 'mixed-fraction-str') {
+    const match = /^(\d+)\s+(\d+)\/(\d+)$/.exec(String(correctAnswer));
+    if (match) {
+      const whole = Number(match[1]);
+      const n = Number(match[2]);
+      const d = Number(match[3]);
+      [
+        renderMixedInline(whole + 2, n, d),
+        renderMixedInline(Math.max(1, whole - 2), n, d),
+        renderMixedInline(whole, Math.min(d - 1, n + 2), d),
+        renderMixedInline(whole, Math.max(1, n - 2), d),
+        renderMixedInline(whole, n, d + 2),
+      ].forEach(addOption);
+    }
+  }
+
+  if (options.length < 5 && type === 'standard') {
+    const numericAnswer = Number(correctAnswer);
+    [1, -1, 2, -2, 3, -3, 5, -5].forEach((diff) => {
+      const maybe = numericAnswer + diff;
+      if (Number.isFinite(maybe) && maybe > 0) addOption(maybe);
+    });
   }
 
   return options.sort(() => Math.random() - 0.5);
@@ -1284,7 +2085,7 @@ export const getQuestionThresholdMs = (
   grade: GradeLevel
 ): number => {
   if (category === 'divisibility') return grade === 5 ? 6500 : 5500;
-  if (category === 'fractions') return 9000;
+  if (category === 'fractions') return 11000;
   if (category === 'combined') return 8000;
   return 6000;
 };
@@ -1313,6 +2114,9 @@ const misconceptionWhy: Record<MisconceptionTag, string> = {
   fraction_simplification: 'Faltó identificar el factor común o la equivalencia de fracciones.',
   fraction_comparison: 'Costó comparar fracciones fijándose en tamaño real y no solo en números sueltos.',
   fraction_operation: 'Hizo falta un paso intermedio para operar fracciones con seguridad.',
+  fraction_common_denominator: 'Faltó igualar los denominadores antes de sumar o restar.',
+  fraction_multiplication: 'La multiplicación de fracciones necesita multiplicar numeradores y denominadores, y luego simplificar.',
+  fraction_division: 'La división de fracciones requiere convertirla en multiplicación usando la fracción recíproca.',
   operation_order: 'El orden de operaciones se rompió en algún paso intermedio.',
   time_pressure: 'La velocidad apretó y eso afectó la precisión.',
   accuracy_lapse: 'Hubo pequeños descuidos más que una falta total de comprensión.',
@@ -1328,6 +2132,9 @@ const misconceptionStrategy: Record<MisconceptionTag, string> = {
   fraction_simplification: 'Busca primero un factor común pequeño y verifica si numerador y denominador se pueden dividir.',
   fraction_comparison: 'Piensa si conviene igualar denominadores o convertir a una referencia simple como 1/2.',
   fraction_operation: 'Haz visible el denominador común antes de sumar o comparar.',
+  fraction_common_denominator: 'Antes de operar, convierte ambas fracciones al mismo denominador y recién entonces suma o resta numeradores.',
+  fraction_multiplication: 'Multiplica numerador por numerador y denominador por denominador, luego simplifica si puedes.',
+  fraction_division: 'Cambia la división por multiplicación: deja la primera fracción igual, invierte la segunda y multiplica.',
   operation_order: 'Resuelve primero lo que está dentro de paréntesis y verifica el resultado antes de seguir.',
   time_pressure: 'Baja un poco el ritmo en los primeros segundos para recuperar precisión.',
   accuracy_lapse: 'Haz una micro pausa antes de tocar la opción final.',
@@ -1340,6 +2147,16 @@ export const fallbackHintForProblem = (
   hintLevel: HintUsage
 ): string => {
   const primary = problem.metadata.misconceptionHints[0] ?? 'unknown';
+  if (problem.metadata.label === 'Fracciones') {
+    const steps = buildFractionSolution(
+      problem.metadata.pattern,
+      problem.metadata.challengeSeed
+    );
+    const step = steps[Math.min(Math.max(1, hintLevel) - 1, steps.length - 1)];
+    if (step) {
+      return `${step.title}: ${step.instruction} ${step.resultLine}`;
+    }
+  }
   if (primary === 'operation_order') {
     if (hintLevel === 1) {
       return 'Sigue siempre la misma ruta mental: primero (), luego [], después {} y al final lo que quedó afuera.';
@@ -1348,6 +2165,30 @@ export const fallbackHintForProblem = (
       return `Haz una mini ruta para "${problem.plainText}": resuelve el grupo más interno, reemplázalo por su resultado y recién entonces sigue con el resto.`;
     }
     return `Tapa mentalmente todo lo exterior y empieza solo por la parte más interna del ejercicio. Cada vez que resuelvas un grupo, vuelve a mirar qué símbolo queda ahora adentro.`;
+  }
+  if (primary === 'fraction_common_denominator') {
+    if (hintLevel === 2) {
+      return `Busca un denominador común para "${problem.plainText}". Reescribe ambas fracciones con ese denominador antes de operar.`;
+    }
+    if (hintLevel === 3) {
+      return 'Ejemplo cercano: para 1/3 + 1/6, conviertes 1/3 en 2/6 y luego sumas 2/6 + 1/6.';
+    }
+  }
+  if (primary === 'fraction_multiplication') {
+    if (hintLevel === 2) {
+      return 'Multiplica los numeradores entre sí y los denominadores entre sí. Al final revisa si la fracción se puede simplificar.';
+    }
+    if (hintLevel === 3) {
+      return 'Ejemplo cercano: 2/3 × 1/4 se piensa como (2×1)/(3×4), entonces queda 2/12 y se simplifica.';
+    }
+  }
+  if (primary === 'fraction_division') {
+    if (hintLevel === 2) {
+      return 'Deja la primera fracción igual, invierte la segunda y cambia la división por multiplicación.';
+    }
+    if (hintLevel === 3) {
+      return 'Ejemplo cercano: 3/4 ÷ 1/2 se vuelve 3/4 × 2/1. Luego multiplicas y simplificas.';
+    }
   }
   if (hintLevel === 1) return misconceptionStrategy[primary];
   if (hintLevel === 2) {
